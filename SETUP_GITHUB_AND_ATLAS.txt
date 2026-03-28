@@ -1,0 +1,46 @@
+================================================================================
+1) FINISH MONGODB URI (one-time)
+================================================================================
+Open: server\.env
+
+Replace this exact text in MONGODB_URI:
+  REPLACE_CLUSTER_HOST
+with your Atlas cluster hostname only, for example:
+  cluster0.ab12cd.mongodb.net
+
+How to find it:
+  MongoDB Atlas website → your Project → Database → Connect → Drivers
+  The connection string contains @cluster0.SOMETHING.mongodb.net — copy SOMETHING part
+  together with cluster0. and .mongodb.net as shown above.
+
+Password note: your password is already URL-encoded in .env (the @ is %40). If you
+change the password in Atlas, update the part between : and @ in MONGODB_URI and
+encode special characters (Atlas "Connect" can copy a ready-made string — you may
+paste the full MONGODB_URI line from there instead).
+
+================================================================================
+2) UPLOAD TO GITHUB (first time)
+================================================================================
+A) Create an empty repo on github.com:
+   Repository name: tasktrackapp (or your choice)
+   Do NOT add README / .gitignore / license if GitHub asks (simpler first push).
+
+B) In PowerShell, from your project folder (d:\App\Task-tracking-app), run:
+
+   git init
+   git branch -M main
+   git add .
+   git commit -m "Initial commit: Task Track app and API"
+   git remote add origin https://github.com/aminmansuri123/tasktrackapp.git
+   git push -u origin main
+
+If push asks for login: use a GitHub Personal Access Token as the password
+(GitHub → Settings → Developer settings → Personal access tokens).
+
+================================================================================
+3) RENDER (later)
+================================================================================
+Set the same MONGODB_URI (with real host), JWT_SECRET, FRONTEND_ORIGIN, MASTER_*
+in the Render dashboard — never commit those to the repo.
+
+================================================================================

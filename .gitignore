@@ -1,0 +1,13 @@
+# Dependencies
+server/node_modules/
+node_modules/
+
+# Secrets (never commit)
+server/.env
+.env
+*.env.local
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db

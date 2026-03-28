@@ -1,0 +1,127 @@
+require('dotenv').config();
+const express = require('express');
+const mongoose = require('mongoose');
+const helmet = require('helmet');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
+
+const { PORT, MONGODB_URI, MASTER_EMAIL, MASTER_PASSWORD, parseOrigins, isProduction } = require('./config');
+const User = require('./models/User');
+const bcrypt = require('bcryptjs');
+
+const authRoutes = require('./routes/auth');
+const workspaceRoutes = require('./routes/workspace');
+const attachmentsRoutes = require('./routes/attachments');
+const masterRoutes = require('./routes/master');
+
+async function ensureMasterUser() {
+  if (!MASTER_PASSWORD) {
+    console.warn('MASTER_PASSWORD not set; master account will not be auto-provisioned.');
+    return;
+  }
+  const email = MASTER_EMAIL.toLowerCase();
+  const passwordHash = await bcrypt.hash(MASTER_PASSWORD, 12);
+  let u = await User.findOne({ email });
+  if (u) {
+    u.passwordHash = passwordHash;
+    u.isMaster = true;
+    u.role = 'admin';
+    u.isActive = true;
+    await u.save();
+  } else {
+    const userId = Date.now();
+    await User.create({
+      userId,
+      email,
+      name: 'Master',
+      passwordHash,
+      role: 'admin',
+      isActive: true,
+      isMaster: true,
+    });
+  }
+  console.log('Master user ensured for', email);
+}
+
+async function main() {
+  if (!MONGODB_URI) {
+    console.error('MONGODB_URI is required');
+    process.exit(1);
+  }
+
+  await mongoose.connect(MONGODB_URI);
+  console.log('MongoDB connected');
+  await ensureMasterUser();
+
+  const app = express();
+  app.set('trust proxy', 1);
+
+  const allowedOrigins = parseOrigins();
+
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    })
+  );
+
+  app.use(
+    cors({
+      origin(origin, cb) {
+        if (!origin) return cb(null, true);
+        if (allowedOrigins.includes(origin)) return cb(null, true);
+        return cb(null, false);
+      },
+      credentials: true,
+    })
+  );
+
+  app.use(express.json({ limit: '15mb' }));
+  app.use(cookieParser());
+
+  const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 500,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const masterLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  app.use(globalLimiter);
+
+  app.get('/health', (_req, res) => res.json({ ok: true }));
+
+  app.use('/api/auth', authLimiter, authRoutes);
+  app.use('/api/workspace', workspaceRoutes);
+  app.use('/api/attachments', attachmentsRoutes);
+  app.use('/api/master', masterLimiter, masterRoutes);
+
+  app.use((err, _req, res, _next) => {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  });
+
+  app.listen(PORT, () => {
+    console.log(`API listening on port ${PORT}`);
+    console.log('Allowed CORS origins:', allowedOrigins.join(', ') || '(none)');
+    if (!isProduction) console.log('NODE_ENV is not production — cookies use non-secure mode');
+  });
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
