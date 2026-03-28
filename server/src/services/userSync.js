@@ -185,4 +185,5 @@ module.exports = {
   usersToClientShapeAll,
   syncUsersFromClientPayload,
   deleteUsersNotInPayload,
+  allocateUniqueUserId,
 };

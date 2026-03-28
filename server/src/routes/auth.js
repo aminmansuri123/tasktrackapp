@@ -6,6 +6,8 @@ const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const { isProduction } = require('../config');
 const { usersToClientShapeAll } = require('../services/userSync');
 const { assertRegistrationAllowed, getSiteSettings } = require('../services/registrationPolicy');
+const { allocateUniqueUserId } = require('../services/userSync');
+const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 
 const router = express.Router();
 
@@ -40,6 +42,25 @@ router.get('/registration-policy', async (_req, res) => {
   }
 });
 
+/** Active non-master admins (for team signup: pick any admin in the org). */
+router.get('/org-admins', async (_req, res) => {
+  try {
+    const list = await User.find({ role: 'admin', isMaster: { $ne: true }, isActive: true })
+      .sort({ name: 1 })
+      .lean();
+    return res.json(
+      list.map((u) => ({
+        id: u.userId,
+        name: u.name || '',
+        email: u.email || '',
+      }))
+    );
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load organization admins' });
+  }
+});
+
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password } = req.body || {};
@@ -55,19 +76,45 @@ router.post('/register', async (req, res) => {
     if (denied) {
       return res.status(403).json({ error: denied });
     }
-    const userId = Date.now();
+    const accountType = req.body?.accountType === 'team_user' ? 'team_user' : 'org_admin';
     const passwordHash = await bcrypt.hash(String(password), 12);
-    const doc = await User.create({
-      userId,
-      email: em,
-      name: String(name).trim(),
-      passwordHash,
-      role: 'admin',
-      isActive: true,
-      isMaster: false,
-      tenantRootUserId: userId,
-    });
-    await ensureWorkspaceForTenantRoot(userId);
+    const userId = await allocateUniqueUserId(Date.now());
+
+    let doc;
+    if (accountType === 'team_user') {
+      const raw = req.body?.orgAdminUserId;
+      const pickerId = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
+      if (Number.isNaN(pickerId)) {
+        return res.status(400).json({ error: 'Select an organization admin' });
+      }
+      const tenantRoot = await resolveTenantRootFromAdminPicker(pickerId);
+      if (tenantRoot == null) {
+        return res.status(400).json({ error: 'Invalid organization admin' });
+      }
+      doc = await User.create({
+        userId,
+        email: em,
+        name: String(name).trim(),
+        passwordHash,
+        role: 'user',
+        isActive: true,
+        isMaster: false,
+        tenantRootUserId: tenantRoot,
+      });
+    } else {
+      doc = await User.create({
+        userId,
+        email: em,
+        name: String(name).trim(),
+        passwordHash,
+        role: 'admin',
+        isActive: true,
+        isMaster: false,
+        tenantRootUserId: userId,
+      });
+      await ensureWorkspaceForTenantRoot(userId);
+    }
+
     const token = signToken({
       sub: doc.userId,
       role: doc.role,

@@ -1350,7 +1350,7 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Tracking System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.6</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.7</span></span>
             </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
@@ -2161,7 +2161,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.6</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.7</span></p>
         </footer>
     </div>
 
@@ -2200,6 +2200,19 @@
                         <label for="loginName">Name</label>
                         <input type="text" class="form-control" id="loginName" name="name" placeholder="Your full name" autocomplete="name">
                     </div>
+                    <div id="loginAccountTypeGroup" class="form-group hidden">
+                        <label for="loginAccountType">Account type</label>
+                        <select id="loginAccountType" class="form-control">
+                            <option value="org_admin">Organization admin (new organization)</option>
+                            <option value="team_user">Team user (under an existing admin)</option>
+                        </select>
+                    </div>
+                    <div id="loginOrgAdminGroup" class="form-group hidden">
+                        <label for="loginOrgAdminSelect">Organization admin</label>
+                        <select id="loginOrgAdminSelect" class="form-control">
+                            <option value="">Select an admin…</option>
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label for="loginEmail">Email</label>
                         <input type="email" class="form-control" id="loginEmail" name="email" placeholder="you@company.com" autocomplete="username" required>
@@ -2212,7 +2225,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.6</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.7</span></p>
                     </div>
                 </div>
             </div>
@@ -2921,7 +2934,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=12.0.6"></script>
+    <script src="app.js?v=12.0.7"></script>
 </body>
 
 </html>

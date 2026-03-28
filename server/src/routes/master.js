@@ -7,8 +7,142 @@ const { usersToClientShapeForTenant } = require('../services/userSync');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 const { getSiteSettings, sanitizePolicyBody } = require('../services/registrationPolicy');
+const { allocateUniqueUserId } = require('../services/userSync');
+const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
+const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 
 const router = express.Router();
+
+function masterUserSummary(doc) {
+  return {
+    id: doc.userId,
+    email: doc.email,
+    name: doc.name,
+    role: doc.role,
+    tenantRootUserId: doc.tenantRootUserId,
+    is_active: doc.isActive,
+    isMaster: doc.isMaster,
+  };
+}
+
+router.post('/users', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const { name, email, password, accountType, orgAdminUserId } = req.body || {};
+    if (!name || !email || !password || String(password).length < 6) {
+      return res.status(400).json({ error: 'Name, email, and password (min 6 characters) required' });
+    }
+    const em = String(email).toLowerCase().trim();
+    if (await User.findOne({ email: em })) {
+      return res.status(400).json({ error: 'Email already registered' });
+    }
+    const userId = await allocateUniqueUserId(Date.now());
+    const passwordHash = await bcrypt.hash(String(password), 12);
+    const type = accountType === 'team_user' ? 'team_user' : 'org_admin';
+
+    if (type === 'team_user') {
+      const raw = orgAdminUserId;
+      const pickerId = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
+      if (Number.isNaN(pickerId)) {
+        return res.status(400).json({ error: 'Select an organization admin' });
+      }
+      const tenantRoot = await resolveTenantRootFromAdminPicker(pickerId);
+      if (tenantRoot == null) {
+        return res.status(400).json({ error: 'Invalid organization admin' });
+      }
+      const doc = await User.create({
+        userId,
+        email: em,
+        name: String(name).trim(),
+        passwordHash,
+        role: 'user',
+        isActive: true,
+        isMaster: false,
+        tenantRootUserId: tenantRoot,
+      });
+      return res.status(201).json({ ok: true, user: masterUserSummary(doc) });
+    }
+
+    const doc = await User.create({
+      userId,
+      email: em,
+      name: String(name).trim(),
+      passwordHash,
+      role: 'admin',
+      isActive: true,
+      isMaster: false,
+      tenantRootUserId: userId,
+    });
+    await ensureWorkspaceForTenantRoot(userId);
+    return res.status(201).json({ ok: true, user: masterUserSummary(doc) });
+  } catch (e) {
+    console.error(e);
+    if (e && e.code === 11000) {
+      return res.status(400).json({ error: 'Email or user id already in use' });
+    }
+    return res.status(500).json({ error: 'Could not create user' });
+  }
+});
+
+router.delete('/users/:userId', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (Number.isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user' });
+    }
+    const target = await User.findOne({ userId });
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (target.isMaster) {
+      return res.status(403).json({ error: 'Cannot delete master account' });
+    }
+    await User.deleteOne({ userId });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+router.patch('/users/:userId', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (Number.isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user' });
+    }
+    const target = await User.findOne({ userId });
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (target.isMaster) {
+      return res.status(403).json({ error: 'Cannot modify master account' });
+    }
+
+    const { role, orgAdminUserId } = req.body || {};
+    if (role === 'admin' || role === 'user') {
+      target.role = role;
+    }
+
+    if (orgAdminUserId !== undefined && orgAdminUserId !== null && orgAdminUserId !== '') {
+      const pickerId =
+        typeof orgAdminUserId === 'number' ? orgAdminUserId : parseInt(String(orgAdminUserId), 10);
+      if (Number.isNaN(pickerId)) {
+        return res.status(400).json({ error: 'Invalid organization admin' });
+      }
+      const tenantRoot = await resolveTenantRootFromAdminPicker(pickerId);
+      if (tenantRoot == null) {
+        return res.status(400).json({ error: 'Invalid organization admin' });
+      }
+      target.tenantRootUserId = tenantRoot;
+    }
+
+    await target.save();
+    return res.json({ ok: true, user: masterUserSummary(target) });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Update failed' });
+  }
+});
 
 router.get('/registration-policy', authMiddleware, requireMaster, async (_req, res) => {
   try {

@@ -1,4 +1,4 @@
-const APP_VERSION = '12.0.6';
+const APP_VERSION = '12.0.7';
 
 let __loginErrorDismissTimer = null;
 
@@ -714,6 +714,8 @@ function checkAuth() {
         if (pw) pw.value = '';
         if (em) em.value = '';
         if (nm) nm.value = '';
+        const lat = document.getElementById('loginAccountType');
+        if (lat) lat.value = 'org_admin';
         setLoginPanelMode('signin');
     }
 }
@@ -733,15 +735,26 @@ function setLoginPanelMode(mode) {
             t.setAttribute('aria-selected', 'false');
         }
     });
+    const accountTypeGroup = document.getElementById('loginAccountTypeGroup');
+    const orgAdminGroup = document.getElementById('loginOrgAdminGroup');
     if (mode === 'register') {
         if (nameGroup) nameGroup.classList.remove('hidden');
+        if (accountTypeGroup) accountTypeGroup.classList.remove('hidden');
         if (submitBtn) submitBtn.textContent = 'Create account';
         if (tReg) {
             tReg.classList.add('active');
             tReg.setAttribute('aria-selected', 'true');
         }
+        if (isApiMode()) {
+            void loadOrgAdminsForRegisterDropdown();
+        } else {
+            loadLocalOrgAdminsForRegisterDropdown();
+        }
+        updateLoginRegistrationFieldsVisibility();
     } else if (mode === 'master') {
         if (nameGroup) nameGroup.classList.add('hidden');
+        if (accountTypeGroup) accountTypeGroup.classList.add('hidden');
+        if (orgAdminGroup) orgAdminGroup.classList.add('hidden');
         if (submitBtn) submitBtn.textContent = 'Master sign in';
         if (tMas) {
             tMas.classList.add('active');
@@ -749,6 +762,8 @@ function setLoginPanelMode(mode) {
         }
     } else {
         if (nameGroup) nameGroup.classList.add('hidden');
+        if (accountTypeGroup) accountTypeGroup.classList.add('hidden');
+        if (orgAdminGroup) orgAdminGroup.classList.add('hidden');
         if (submitBtn) submitBtn.textContent = 'Sign in';
         if (tSign) {
             tSign.classList.add('active');
@@ -765,7 +780,7 @@ function updateLoginScreenCopy() {
         const modal = document.getElementById('loginModal');
         const mode = (modal && modal.getAttribute('data-login-mode')) || 'signin';
         if (mode === 'register') {
-            sub.textContent = 'Creates a new organization admin account. Your workspace is created on the server — nothing is saved as a file in your browser.';
+            sub.textContent = 'Choose organization admin (new org + workspace) or team user (join an existing admin). Cloud signup uses the server.';
         } else if (mode === 'master') {
             sub.textContent = 'Master sign-in for cross-tenant support tools only.';
         } else {
@@ -799,6 +814,52 @@ function wireLoginScreenControls() {
     if (tSign) tSign.addEventListener('click', () => setLoginPanelMode('signin'));
     if (tReg) tReg.addEventListener('click', () => setLoginPanelMode('register'));
     if (tMas) tMas.addEventListener('click', () => setLoginPanelMode('master'));
+    const lat = document.getElementById('loginAccountType');
+    if (lat) lat.addEventListener('change', updateLoginRegistrationFieldsVisibility);
+}
+
+function updateLoginRegistrationFieldsVisibility() {
+    const modal = document.getElementById('loginModal');
+    if (!modal || modal.getAttribute('data-login-mode') !== 'register') return;
+    const typeEl = document.getElementById('loginAccountType');
+    const oag = document.getElementById('loginOrgAdminGroup');
+    if (!oag || !typeEl) return;
+    if (typeEl.value === 'team_user') {
+        oag.classList.remove('hidden');
+    } else {
+        oag.classList.add('hidden');
+    }
+}
+
+function loadLocalOrgAdminsForRegisterDropdown() {
+    const sel = document.getElementById('loginOrgAdminSelect');
+    if (!sel) return;
+    const data = getData();
+    const admins = (data.users || []).filter(u => u.role === 'admin' && !isMasterUserRecord(u));
+    sel.innerHTML = '<option value="">Select an admin…</option>'
+        + admins.map(u => `<option value="${u.id}">${escapeHtml(u.name)} (${escapeHtml(u.email)})</option>`).join('');
+    updateLoginRegistrationFieldsVisibility();
+}
+
+async function loadOrgAdminsForRegisterDropdown() {
+    const sel = document.getElementById('loginOrgAdminSelect');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Loading…</option>';
+    try {
+        const res = await apiFetch('/api/auth/org-admins');
+        if (!res.ok) throw new Error('load failed');
+        const list = await res.json();
+        if (!Array.isArray(list) || list.length === 0) {
+            sel.innerHTML = '<option value="">No organization admins yet — register as admin first</option>';
+        } else {
+            const opts = list.map(a => `<option value="${a.id}">${escapeHtml(a.name)} (${escapeHtml(a.email)})</option>`).join('');
+            sel.innerHTML = `<option value="">Select an admin…</option>${opts}`;
+        }
+    } catch (e) {
+        console.error(e);
+        sel.innerHTML = '<option value="">Could not load admins</option>';
+    }
+    updateLoginRegistrationFieldsVisibility();
 }
 
 async function login() {
@@ -933,12 +994,26 @@ async function register() {
         return;
     }
 
+    const accountTypeEl = document.getElementById('loginAccountType');
+    const accountType = accountTypeEl && accountTypeEl.value === 'team_user' ? 'team_user' : 'org_admin';
+    let orgAdminUserId;
+    if (accountType === 'team_user') {
+        const sel = document.getElementById('loginOrgAdminSelect');
+        orgAdminUserId = sel ? parseInt(sel.value, 10) : NaN;
+        if (Number.isNaN(orgAdminUserId) || orgAdminUserId <= 0) {
+            showError('loginError', 'Select an organization admin for team signup.');
+            return;
+        }
+    }
+
     if (isApiMode()) {
         let res;
+        const regBody = { name, email, password, accountType };
+        if (accountType === 'team_user') regBody.orgAdminUserId = orgAdminUserId;
         try {
             res = await apiFetch('/api/auth/register', {
                 method: 'POST',
-                body: JSON.stringify({ name, email, password })
+                body: JSON.stringify(regBody)
             });
         } catch (e) {
             console.error(e);
@@ -1026,14 +1101,33 @@ async function register() {
         return;
     }
 
-    const newUser = {
-        id: Date.now(),
-        name,
-        email,
-        password,
-        role: 'admin',
-        is_active: true
-    };
+    let newUser;
+    if (accountType === 'team_user') {
+        const adminUser = data.users.find(u =>
+            Number(u.id) === orgAdminUserId && u.role === 'admin' && !isMasterUserRecord(u));
+        if (!adminUser) {
+            showError('loginError', 'Invalid organization admin.');
+            return;
+        }
+        newUser = {
+            id: Date.now(),
+            name,
+            email,
+            password,
+            role: 'user',
+            is_active: true,
+            tenant_root_id: Number(adminUser.id)
+        };
+    } else {
+        newUser = {
+            id: Date.now(),
+            name,
+            email,
+            password,
+            role: 'admin',
+            is_active: true
+        };
+    }
 
     data.users.push(newUser);
     saveData(data);
@@ -5477,6 +5571,18 @@ function renderSettings() {
             const opts = data.users.map(u =>
                 `<option value="${u.id}">${escapeHtml(u.name)} (${escapeHtml(u.email)})</option>`
             ).join('');
+            const orgAdminOptsForMaster = (data.users || [])
+                .filter(u => u.role === 'admin' && !isMasterUserRecord(u))
+                .map(u =>
+                    `<option value="${u.id}">${escapeHtml(u.name)} (${escapeHtml(u.email)})</option>`
+                )
+                .join('');
+            const nonMasterUserOpts = (data.users || [])
+                .filter(u => !isMasterUserRecord(u))
+                .map(u =>
+                    `<option value="${u.id}">${escapeHtml(u.name)} (${escapeHtml(u.email)}) — ${escapeHtml(u.role || 'user')}</option>`
+                )
+                .join('');
             const accountRows = (data.users || [])
                 .filter(u => !isMasterUserRecord(u))
                 .map(u => {
@@ -5512,6 +5618,47 @@ function renderSettings() {
                     <textarea id="masterRegDomains" class="form-control" rows="3" placeholder="company.com"></textarea>
                 </div>
                 <button type="button" class="btn btn-primary" onclick="saveMasterRegistrationPolicy()">Save registration rules</button>
+                <h3 style="margin-top:24px;">Cross-tenant user management</h3>
+                <p style="color:#666;font-size:13px;">Add organization admins or team users, delete accounts, set admin vs user role, or move a user under another organization admin.</p>
+                <div class="form-group" style="margin-top:12px;">
+                    <label>1 — Add organization admin (new tenant)</label>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+                        <input type="text" id="masterNewAdminName" class="form-control" placeholder="Name" style="min-width:130px;">
+                        <input type="email" id="masterNewAdminEmail" class="form-control" placeholder="Email" style="min-width:160px;">
+                        <input type="password" id="masterNewAdminPassword" class="form-control" placeholder="Password" style="min-width:120px;" autocomplete="new-password">
+                        <button type="button" class="btn btn-primary" onclick="masterApiCreateOrgAdmin()">Create admin</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>2 — Add team user</label>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+                        <input type="text" id="masterNewUserName" class="form-control" placeholder="Name" style="min-width:130px;">
+                        <input type="email" id="masterNewUserEmail" class="form-control" placeholder="Email" style="min-width:160px;">
+                        <input type="password" id="masterNewUserPassword" class="form-control" placeholder="Password" style="min-width:120px;" autocomplete="new-password">
+                        <select id="masterNewUserOrgAdmin" class="form-control" style="min-width:200px;">
+                            <option value="">Organization admin…</option>${orgAdminOptsForMaster}
+                        </select>
+                        <button type="button" class="btn btn-primary" onclick="masterApiCreateTeamUser()">Create user</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>User to manage (for actions 3–5)</label>
+                    <select id="masterManageUserId" class="form-control" style="max-width:100%;">
+                        <option value="">Select user…</option>${nonMasterUserOpts}
+                    </select>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px;">
+                    <button type="button" class="btn btn-danger" onclick="masterApiDeleteUser()">3 — Delete user</button>
+                    <select id="masterManageNewRole" class="form-control" style="width:auto;">
+                        <option value="admin">4 — Set role: admin</option>
+                        <option value="user">4 — Set role: user</option>
+                    </select>
+                    <button type="button" class="btn btn-secondary" onclick="masterApiPatchUserRole()">Apply role</button>
+                    <select id="masterManageMoveOrg" class="form-control" style="min-width:200px;">
+                        <option value="">5 — Move to org…</option>${orgAdminOptsForMaster}
+                    </select>
+                    <button type="button" class="btn btn-secondary" onclick="masterApiMoveUserOrg()">Apply org</button>
+                </div>
                 <hr style="margin:28px 0;border:none;border-top:1px solid #e5e5e5;">
                 <h3>Master password reset</h3>
                 <p style="color:#666;font-size:13px;">All accounts are listed in <strong>User Management</strong> above. Set a new login password for any user (including other admins) below. Uses the hosted API only.</p>
@@ -5653,6 +5800,177 @@ async function saveMasterRegistrationPolicy() {
     } catch (e) {
         console.error(e);
         alert('Request failed. Check your connection and API URL.');
+    }
+}
+
+async function masterRefreshAfterUserChange() {
+    try {
+        await apiPullWorkspace();
+    } catch (e) {
+        console.error(e);
+    }
+    renderSettings();
+    renderUsers();
+    renderTasks();
+}
+
+async function masterApiCreateOrgAdmin() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const name = document.getElementById('masterNewAdminName') && document.getElementById('masterNewAdminName').value.trim();
+    const email = document.getElementById('masterNewAdminEmail') && document.getElementById('masterNewAdminEmail').value.trim();
+    const password = document.getElementById('masterNewAdminPassword') && document.getElementById('masterNewAdminPassword').value;
+    if (!name || !email || !password || password.length < 6) {
+        alert('Name, email, and password (min 6 characters) required.');
+        return;
+    }
+    try {
+        const res = await apiFetch('/api/master/users', {
+            method: 'POST',
+            body: JSON.stringify({ name, email, password, accountType: 'org_admin' }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Create failed');
+            return;
+        }
+        document.getElementById('masterNewAdminName').value = '';
+        document.getElementById('masterNewAdminEmail').value = '';
+        document.getElementById('masterNewAdminPassword').value = '';
+        alert('Organization admin created.');
+        await masterRefreshAfterUserChange();
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+async function masterApiCreateTeamUser() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const name = document.getElementById('masterNewUserName') && document.getElementById('masterNewUserName').value.trim();
+    const email = document.getElementById('masterNewUserEmail') && document.getElementById('masterNewUserEmail').value.trim();
+    const password = document.getElementById('masterNewUserPassword') && document.getElementById('masterNewUserPassword').value;
+    const orgSel = document.getElementById('masterNewUserOrgAdmin');
+    const orgAdminUserId = orgSel ? parseInt(orgSel.value, 10) : NaN;
+    if (!name || !email || !password || password.length < 6) {
+        alert('Name, email, and password (min 6 characters) required.');
+        return;
+    }
+    if (Number.isNaN(orgAdminUserId) || orgAdminUserId <= 0) {
+        alert('Select an organization admin.');
+        return;
+    }
+    try {
+        const res = await apiFetch('/api/master/users', {
+            method: 'POST',
+            body: JSON.stringify({
+                name,
+                email,
+                password,
+                accountType: 'team_user',
+                orgAdminUserId,
+            }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Create failed');
+            return;
+        }
+        document.getElementById('masterNewUserName').value = '';
+        document.getElementById('masterNewUserEmail').value = '';
+        document.getElementById('masterNewUserPassword').value = '';
+        alert('Team user created.');
+        await masterRefreshAfterUserChange();
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+async function masterApiDeleteUser() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const sel = document.getElementById('masterManageUserId');
+    const uid = sel ? parseInt(sel.value, 10) : NaN;
+    if (Number.isNaN(uid) || uid <= 0) {
+        alert('Select a user.');
+        return;
+    }
+    if (!confirm('Permanently delete this user from the server? This cannot be undone.')) return;
+    try {
+        const res = await apiFetch(`/api/master/users/${uid}`, { method: 'DELETE' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Delete failed');
+            return;
+        }
+        alert('User deleted.');
+        await masterRefreshAfterUserChange();
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+async function masterApiPatchUserRole() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const sel = document.getElementById('masterManageUserId');
+    const uid = sel ? parseInt(sel.value, 10) : NaN;
+    const roleEl = document.getElementById('masterManageNewRole');
+    const role = roleEl && roleEl.value;
+    if (Number.isNaN(uid) || uid <= 0) {
+        alert('Select a user.');
+        return;
+    }
+    if (role !== 'admin' && role !== 'user') {
+        alert('Invalid role.');
+        return;
+    }
+    try {
+        const res = await apiFetch(`/api/master/users/${uid}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ role }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Update failed');
+            return;
+        }
+        alert('Role updated.');
+        await masterRefreshAfterUserChange();
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+async function masterApiMoveUserOrg() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const sel = document.getElementById('masterManageUserId');
+    const uid = sel ? parseInt(sel.value, 10) : NaN;
+    const orgSel = document.getElementById('masterManageMoveOrg');
+    const orgAdminUserId = orgSel ? parseInt(orgSel.value, 10) : NaN;
+    if (Number.isNaN(uid) || uid <= 0) {
+        alert('Select a user.');
+        return;
+    }
+    if (Number.isNaN(orgAdminUserId) || orgAdminUserId <= 0) {
+        alert('Select an organization admin to move the user under.');
+        return;
+    }
+    try {
+        const res = await apiFetch(`/api/master/users/${uid}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ orgAdminUserId }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Update failed');
+            return;
+        }
+        alert('User moved to that organization.');
+        await masterRefreshAfterUserChange();
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
     }
 }
 
