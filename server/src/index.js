@@ -8,6 +8,7 @@ const rateLimit = require('express-rate-limit');
 
 const { PORT, MONGODB_URI, MASTER_EMAIL, MASTER_PASSWORD, parseOrigins, isProduction } = require('./config');
 const User = require('./models/User');
+const Workspace = require('./models/Workspace');
 const bcrypt = require('bcryptjs');
 
 const authRoutes = require('./routes/auth');
@@ -28,6 +29,7 @@ async function ensureMasterUser() {
     u.isMaster = true;
     u.role = 'admin';
     u.isActive = true;
+    u.tenantRootUserId = null;
     await u.save();
   } else {
     const userId = Date.now();
@@ -39,9 +41,47 @@ async function ensureMasterUser() {
       role: 'admin',
       isActive: true,
       isMaster: true,
+      tenantRootUserId: null,
     });
   }
   console.log('Master user ensured for', email);
+}
+
+/** One-time style migration: shared workspace → first org admin as tenant root. */
+async function migrateLegacyTenants() {
+  try {
+    const users = await User.find({});
+    if (users.length === 0) return;
+
+    const firstAdmin = users.find((x) => x.role === 'admin' && !x.isMaster);
+    const anyNonMaster = users.find((x) => !x.isMaster);
+    const rootId = firstAdmin?.userId ?? anyNonMaster?.userId;
+    if (rootId == null) return;
+
+    const workspaces = await Workspace.find({});
+    const legacyWs = workspaces.find((w) => w.tenantRootUserId == null);
+    if (legacyWs) {
+      legacyWs.tenantRootUserId = rootId;
+      await legacyWs.save();
+      console.log('Assigned legacy workspace to tenant root userId', rootId);
+    }
+
+    for (const u of users) {
+      if (u.isMaster) {
+        if (u.tenantRootUserId != null) {
+          u.tenantRootUserId = null;
+          await u.save();
+        }
+        continue;
+      }
+      if (u.tenantRootUserId == null) {
+        u.tenantRootUserId = rootId;
+        await u.save();
+      }
+    }
+  } catch (e) {
+    console.warn('Tenant migration warning:', e.message);
+  }
 }
 
 async function main() {
@@ -53,6 +93,7 @@ async function main() {
   await mongoose.connect(MONGODB_URI);
   console.log('MongoDB connected');
   await ensureMasterUser();
+  await migrateLegacyTenants();
 
   const app = express();
   app.set('trust proxy', 1);

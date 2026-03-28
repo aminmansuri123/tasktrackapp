@@ -1,3 +1,5 @@
+const APP_VERSION = '11.0.2';
+
 // Data Storage
 let currentUser = null;
 let currentMonth = new Date().getMonth();
@@ -33,7 +35,7 @@ async function apiPullWorkspace() {
 }
 
 function scheduleWorkspacePush() {
-    if (!isApiMode() || !currentUser) return;
+    if (!isApiMode() || !currentUser || currentUser.isMaster) return;
     clearTimeout(__workspacePushTimer);
     __workspacePushTimer = setTimeout(() => flushWorkspaceToApi(), WORKSPACE_PUSH_DEBOUNCE_MS);
 }
@@ -55,20 +57,20 @@ async function putWorkspaceCacheToServer() {
 }
 
 async function flushWorkspaceToApi() {
-    if (!isApiMode() || !currentUser || !__workspaceCache) return;
+    if (!isApiMode() || !currentUser || currentUser.isMaster || !__workspaceCache) return;
     await putWorkspaceCacheToServer();
 }
 
 /** Immediate PUT (used after import) while session cookie is still valid. Cancels debounced push. */
 async function flushWorkspaceToApiNow() {
-    if (!isApiMode() || !currentUser || !__workspaceCache) return false;
+    if (!isApiMode() || !currentUser || currentUser.isMaster || !__workspaceCache) return false;
     clearTimeout(__workspacePushTimer);
     __workspacePushTimer = null;
     return putWorkspaceCacheToServer();
 }
 
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && isApiMode() && currentUser) {
+    if (document.visibilityState === 'hidden' && isApiMode() && currentUser && !currentUser.isMaster) {
         flushWorkspaceToApi();
     }
 });
@@ -374,6 +376,9 @@ function init() {
         plannerDateInput.value = formatDateString(new Date());
     }
 
+    const footerVer = document.getElementById('appFooterVersion');
+    if (footerVer) footerVer.textContent = APP_VERSION;
+
     // Initialize period filters from localStorage
     const period = getDashboardPeriod();
     const fromEl = document.getElementById('dashboardPeriodFrom');
@@ -575,7 +580,6 @@ function getNextTaskNumberFromData(data) {
 function checkAuth() {
     const user = localStorage.getItem('currentUser');
     document.body.classList.remove('user-admin');
-    const masterBtn = document.getElementById('masterSignInBtn');
     const masterHint = document.getElementById('masterToolsHint');
     if (user) {
         currentUser = JSON.parse(user);
@@ -584,13 +588,11 @@ function checkAuth() {
         if (currentUser.role === 'admin') {
             document.body.classList.add('user-admin');
         }
-        if (masterBtn) masterBtn.style.display = currentUser.isMaster ? 'none' : 'inline-block';
         if (masterHint) masterHint.style.display = currentUser.isMaster ? 'inline-block' : 'none';
     } else {
         currentUser = null;
         document.getElementById('loginModal').classList.add('active');
         document.getElementById('currentUser').textContent = 'Guest';
-        if (masterBtn) masterBtn.style.display = 'none';
         if (masterHint) masterHint.style.display = 'none';
         const pw = document.getElementById('loginPassword');
         const em = document.getElementById('loginEmail');
@@ -608,7 +610,6 @@ function setLoginPanelMode(mode) {
     modal.setAttribute('data-login-mode', mode);
     const nameGroup = document.getElementById('loginNameGroup');
     const submitBtn = document.getElementById('loginSubmitBtn');
-    const hint = document.getElementById('loginModeHint');
     const tSign = document.getElementById('loginTabSignin');
     const tReg = document.getElementById('loginTabRegister');
     const tMas = document.getElementById('loginTabMaster');
@@ -621,7 +622,6 @@ function setLoginPanelMode(mode) {
     if (mode === 'register') {
         if (nameGroup) nameGroup.classList.remove('hidden');
         if (submitBtn) submitBtn.textContent = 'Create account';
-        if (hint) hint.textContent = 'New accounts register as a standard user. An admin can change roles in Settings.';
         if (tReg) {
             tReg.classList.add('active');
             tReg.setAttribute('aria-selected', 'true');
@@ -629,7 +629,6 @@ function setLoginPanelMode(mode) {
     } else if (mode === 'master') {
         if (nameGroup) nameGroup.classList.add('hidden');
         if (submitBtn) submitBtn.textContent = 'Master sign in';
-        if (hint) hint.textContent = 'Sign in with the master workspace account (same server as team login).';
         if (tMas) {
             tMas.classList.add('active');
             tMas.setAttribute('aria-selected', 'true');
@@ -637,7 +636,6 @@ function setLoginPanelMode(mode) {
     } else {
         if (nameGroup) nameGroup.classList.add('hidden');
         if (submitBtn) submitBtn.textContent = 'Sign in';
-        if (hint) hint.textContent = 'Use your workspace email and password. Credentials are not stored in the browser; only your profile is kept after login.';
         if (tSign) {
             tSign.classList.add('active');
             tSign.setAttribute('aria-selected', 'true');
@@ -668,23 +666,6 @@ function wireLoginScreenControls() {
     if (tSign) tSign.addEventListener('click', () => setLoginPanelMode('signin'));
     if (tReg) tReg.addEventListener('click', () => setLoginPanelMode('register'));
     if (tMas) tMas.addEventListener('click', () => setLoginPanelMode('master'));
-}
-
-async function goToMasterLogin() {
-    if (!confirm('You will be signed out so you can sign in with a master account. Continue?')) return;
-    if (isApiMode()) {
-        try {
-            await apiFetch('/api/auth/logout', { method: 'POST' });
-        } catch (_) {
-            /* ignore */
-        }
-        __workspaceCache = null;
-    }
-    localStorage.removeItem('currentUser');
-    currentUser = null;
-    document.body.classList.remove('user-admin');
-    checkAuth();
-    setLoginPanelMode('master');
 }
 
 async function login() {
@@ -790,13 +771,12 @@ async function register() {
         return;
     }
 
-    const isFirstUser = data.users.length === 0;
     const newUser = {
         id: Date.now(),
         name,
         email,
         password,
-        role: isFirstUser ? 'admin' : 'user',
+        role: 'admin',
         is_active: true
     };
 
@@ -814,7 +794,6 @@ async function register() {
 
 window.setLoginPanelMode = setLoginPanelMode;
 window.submitLoginPanel = submitLoginPanel;
-window.goToMasterLogin = goToMasterLogin;
 
 async function logout() {
     if (isApiMode()) {
@@ -4979,20 +4958,27 @@ function renderUsers() {
     if (currentUser.role !== 'admin') return;
 
     const data = getData();
+    const masterReadOnly = isApiMode() && currentUser.isMaster;
     const html = data.users.map(user => `
         <tr>
-            <td>${user.name}</td>
-            <td>${user.email}</td>
+            <td>${escapeHtml(user.name)}</td>
+            <td>${escapeHtml(user.email)}</td>
             <td><span class="badge ${user.role === 'admin' ? 'badge-high' : 'badge-low'}">${user.role}</span></td>
             <td><span class="badge ${user.is_active ? 'badge-completed' : 'badge-pending'}">${user.is_active ? 'Active' : 'Disabled'}</span></td>
-            <td>
-                <button class="btn btn-primary" onclick="editUser(${user.id})" style="padding: 5px 10px; font-size: 12px;">Edit</button>
-                ${user.id !== currentUser.id ? `<button class="btn btn-danger" onclick="deleteUser(${user.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>` : ''}
+            <td>${masterReadOnly
+        ? '<span style="color:#888;font-size:12px;">Use Master password reset below</span>'
+        : `<button type="button" class="btn btn-primary" onclick="editUser(${user.id})" style="padding: 5px 10px; font-size: 12px;">Edit</button>
+                ${user.id !== currentUser.id ? `<button type="button" class="btn btn-danger" onclick="deleteUser(${user.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>` : ''}`}
             </td>
         </tr>
     `).join('');
 
     document.getElementById('usersList').innerHTML = html || '<tr><td colspan="5" style="text-align: center;">No users</td></tr>';
+
+    const addBtn = document.getElementById('settingsAddUserBtn');
+    if (addBtn) {
+        addBtn.style.display = masterReadOnly ? 'none' : 'inline-block';
+    }
 }
 
 function openUserModal(userId = null) {
@@ -5143,6 +5129,38 @@ function renderSettings() {
     const autoExportCheckbox = document.getElementById('autoExportEnabled');
     if (autoExportCheckbox) {
         autoExportCheckbox.checked = localStorage.getItem('autoExportEnabled') === 'true';
+    }
+
+    const dataMgmt = document.getElementById('settingsDataManagement');
+    const exportBtn = document.getElementById('settingsDataExportBtn');
+    const importBtn = document.getElementById('settingsDataImportBtn');
+    const autoWrap = document.getElementById('settingsAutoExportWrap');
+    const note = document.getElementById('settingsDataMgmtNote');
+    if (dataMgmt) {
+        if (isApiMode() && currentUser.isMaster) {
+            dataMgmt.style.display = 'none';
+        } else {
+            dataMgmt.style.display = 'block';
+            if (exportBtn) {
+                exportBtn.textContent = isApiMode() && !currentUser.isMaster
+                    ? 'Download backup (cloud database)'
+                    : 'Export all data (JSON)';
+            }
+            if (importBtn) {
+                importBtn.textContent = isApiMode() && !currentUser.isMaster
+                    ? 'Restore from backup (cloud)'
+                    : 'Import data (JSON)';
+            }
+            if (autoWrap) {
+                autoWrap.style.display = isApiMode() ? 'none' : 'block';
+            }
+            if (note) {
+                note.textContent = isApiMode() && !currentUser.isMaster
+                    ? 'Backup and restore use your workspace on the server (not browser storage).'
+                    : '';
+                note.style.display = note.textContent ? 'block' : 'none';
+            }
+        }
     }
 }
 
@@ -5941,8 +5959,26 @@ function exportData(format) {
     }
 }
 
-// Export/Import Functions (export includes IndexedDB attachment blobs for full restore)
-function exportAllData() {
+// Export/Import Functions (export includes IndexedDB attachment blobs for full restore in local mode)
+async function exportAllData() {
+    if (isApiMode() && currentUser && currentUser.role === 'admin' && !currentUser.isMaster) {
+        try {
+            const res = await apiFetch('/api/workspace/backup');
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert(err.error || 'Could not download backup from server.');
+                return;
+            }
+            const payload = await res.json();
+            const filename = `todo-app-cloud-backup-${formatDateString(new Date())}.json`;
+            downloadFile(JSON.stringify(payload, null, 2), filename, 'application/json');
+            alert('✅ Cloud workspace backup downloaded.\n\nFile: ' + filename + '\n\nThis snapshot is stored on the server for your account.');
+        } catch (e) {
+            reportError(e, 'Cloud backup');
+        }
+        return;
+    }
+
     const data = getData();
 
     const completeData = {
@@ -5970,7 +6006,7 @@ function exportAllData() {
 
     const exportAndDownload = (attachmentBlobs) => {
         const exportData = {
-            version: '11.0',
+            version: APP_VERSION,
             exportDate: new Date().toISOString(),
         applicationName: 'Task Management System',
             data: completeData,
@@ -6068,6 +6104,31 @@ function importAllData(event) {
                 `\nExport Date: ${imported.exportDate || 'Unknown'}`;
 
             if (confirm(summary + '\n\nProceed with import?')) {
+                if (isApiMode() && currentUser && currentUser.role === 'admin' && !currentUser.isMaster) {
+                    try {
+                        const res = await apiFetch('/api/workspace/restore', {
+                            method: 'POST',
+                            body: JSON.stringify(imported)
+                        });
+                        if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            alert(err.error || 'Server restore failed.');
+                            event.target.value = '';
+                            return;
+                        }
+                        const merged = await res.json();
+                        __workspaceCache = merged;
+                        alert('✅ Cloud workspace restored from backup file.\n\nYour session stays active.');
+                        event.target.value = '';
+                        init();
+                    } catch (err) {
+                        console.error(err);
+                        alert('❌ Restore failed: ' + (err.message || err));
+                        event.target.value = '';
+                    }
+                    return;
+                }
+
                 const attachmentBlobs = imported.attachmentBlobs || {};
                 const normalizedData = normalizeData(completeData);
                 const keys = Object.keys(attachmentBlobs);
@@ -6147,7 +6208,7 @@ function autoExportData(data) {
         };
 
         const exportData = {
-            version: '11.0',
+            version: APP_VERSION,
             exportDate: new Date().toISOString(),
         applicationName: 'Task Management System',
             data: completeData
@@ -8879,35 +8940,30 @@ function formatPathForLink(path) {
     return `file://${path}`;
 }
 
-// Handle path click (path link in location card)
-function handlePathClick(event, path, category) {
-    if (category === 'folder_path') {
-        event.preventDefault();
-        copyToClipboard(path);
-        tryOpenPath(path, category);
-        return false;
-    }
-    // For files, allow default link behavior (open directly)
-    return true;
+// Handle path click (path link in location card) — open folder/file directly (browser may block file:// from HTTPS)
+function handlePathClick(event, path, _category) {
+    event.preventDefault();
+    tryOpenPath(path);
+    return false;
 }
 
-// Open path in explorer / file manager - tries to open directly without blocking alert
-function openPathInExplorer(path, category) {
-    copyToClipboard(path);
-    tryOpenPath(path, category);
+// Open path in explorer / file manager
+function openPathInExplorer(path, _category) {
+    tryOpenPath(path);
 }
 
-// Try to open path (folder or file) - uses file:// link; folders may open in Explorer on Windows
-function tryOpenPath(path, category) {
+function tryOpenPath(path) {
     const url = formatPathForLink(path);
-    const link = document.createElement('a');
-    link.href = url;
-    link.target = '_blank';
-    link.rel = 'noopener';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    // Non-blocking: path is copied; file:// may open in Explorer (Windows) or system file manager
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
 }
 
 // Copy to clipboard

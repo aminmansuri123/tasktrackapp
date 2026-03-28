@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { authMiddleware } = require('../middleware/auth');
 const requireMaster = require('../middleware/requireMaster');
-const { usersToClientShape } = require('../services/userSync');
+const { usersToClientShapeForTenant } = require('../services/userSync');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 
@@ -31,15 +31,17 @@ router.post('/users/:userId/password', authMiddleware, requireMaster, async (req
 
 router.post('/resync-workspace-users', authMiddleware, requireMaster, async (_req, res) => {
   try {
-    const ws = await Workspace.findOne({ name: 'default' });
-    if (!ws) {
-      return res.json({ ok: true });
+    const workspaces = await Workspace.find({ tenantRootUserId: { $ne: null } });
+    // eslint-disable-next-line no-restricted-syntax
+    for (const ws of workspaces) {
+      const root = ws.tenantRootUserId;
+      const normalized = normalizeWorkspacePayload(ws.data);
+      normalized.users = await usersToClientShapeForTenant(root);
+      ws.data = normalized;
+      ws.markModified('data');
+      // eslint-disable-next-line no-await-in-loop
+      await ws.save();
     }
-    const normalized = normalizeWorkspacePayload(ws.data);
-    normalized.users = await usersToClientShape();
-    ws.data = normalized;
-    ws.markModified('data');
-    await ws.save();
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);

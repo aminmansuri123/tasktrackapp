@@ -26,6 +26,9 @@
             border-radius: 10px;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            min-height: calc(100vh - 40px);
         }
 
         .header {
@@ -86,6 +89,25 @@
 
         .content {
             padding: 30px;
+            flex: 1;
+        }
+
+        .app-footer {
+            padding: 18px 24px 22px;
+            text-align: center;
+            border-top: 1px solid #e8e8e8;
+            background: linear-gradient(180deg, #fafbff 0%, #f0f2f8 100%);
+            color: #4a5568;
+            font-size: 13px;
+        }
+
+        .app-footer p {
+            margin: 4px 0;
+        }
+
+        .app-footer-version {
+            color: #5c6bc0;
+            font-weight: 600;
         }
 
         .tab-content {
@@ -1109,11 +1131,9 @@
         <div class="header">
             <div>
                 <h1>📋 Task Management System</h1>
-                <p style="font-size: 12px; margin-top: 5px; opacity: 0.9;">Developed by - Amin Mansuri | v11.0</p>
             </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
-                <button type="button" class="btn btn-secondary login-master-link" id="masterSignInBtn" onclick="goToMasterLogin()" style="display: none;">Master sign-in</button>
                 <button type="button" id="masterToolsHint" class="master-tools-hint" style="display: none;" title="Open Settings" onclick="switchTab('settings', document.querySelector('.nav-tab[onclick*=\"settings\"]'))">Master tools → Settings (⚙)</button>
                 <button class="btn btn-secondary" onclick="logout()">Logout</button>
             </div>
@@ -1823,7 +1843,7 @@
                     <div
                         style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                         <h3>User Management</h3>
-                        <button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>
+                        <button type="button" class="btn btn-primary" id="settingsAddUserBtn" onclick="openUserModal()">+ Add User</button>
                     </div>
                     <table class="table">
                         <thead>
@@ -1882,16 +1902,17 @@
                     </div>
                 </div>
 
-                <div class="card" style="margin-bottom: 20px;">
+                <div class="card" style="margin-bottom: 20px;" id="settingsDataManagement">
                     <h3>Data Management</h3>
-                    <div style="display: flex; gap: 10px; margin-top: 15px;">
-                        <button class="btn btn-secondary" onclick="exportAllData()">Export All Data (JSON)</button>
+                    <p id="settingsDataMgmtNote" style="font-size: 13px; color: #666; margin-bottom: 10px;"></p>
+                    <div style="display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap;">
+                        <button type="button" class="btn btn-secondary" id="settingsDataExportBtn" onclick="exportAllData()">Export all data (JSON)</button>
                         <input type="file" id="importFileInput" accept=".json" style="display: none;"
                             onchange="importAllData(event)">
-                        <button class="btn btn-secondary"
-                            onclick="document.getElementById('importFileInput').click()">Import Data (JSON)</button>
+                        <button type="button" class="btn btn-secondary" id="settingsDataImportBtn"
+                            onclick="document.getElementById('importFileInput').click()">Import data (JSON)</button>
                     </div>
-                    <div style="margin-top: 15px;">
+                    <div style="margin-top: 15px;" id="settingsAutoExportWrap">
                         <label>
                             <input type="checkbox" id="autoExportEnabled" onchange="toggleAutoExport()"> Enable
                             Auto-Export (Backup to browser storage)
@@ -1912,6 +1933,11 @@
                 </div>
             </div>
         </div>
+
+        <footer class="app-footer" role="contentinfo">
+            <p>Developed by — Amin Mansuri</p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">11.0.2</span></p>
+        </footer>
     </div>
 
     <!-- Login (full-screen gate) -->
@@ -1939,7 +1965,6 @@
                 <input type="password" class="form-control" id="loginPassword" name="password" placeholder="Min. 6 characters" autocomplete="off" required>
             </div>
             <button type="button" class="login-primary" id="loginSubmitBtn">Sign in</button>
-            <p id="loginModeHint" class="login-hint">Use your workspace email and password. Nothing is saved in the browser except your session profile after login.</p>
             <div id="loginError" style="margin-top: 15px;"></div>
         </div>
     </div>
@@ -2609,7 +2634,7 @@
     </div>
 
     <script src="config.js"></script>
-    <script src="app.js?v=11.0.1"></script>
+    <script src="app.js?v=11.0.2"></script>
 </body>
 
 </html>

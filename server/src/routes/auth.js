@@ -1,9 +1,11 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const Workspace = require('../models/Workspace');
 const { signToken } = require('../middleware/auth');
 const { isProduction } = require('../config');
-const { usersToClientShape } = require('../services/userSync');
+const { usersToClientShapeAll } = require('../services/userSync');
+const { defaultWorkspaceData } = require('../services/defaultWorkspace');
 
 const router = express.Router();
 
@@ -39,8 +41,6 @@ router.post('/register', async (req, res) => {
     if (exists) {
       return res.status(400).json({ error: 'Email already registered' });
     }
-    const countNonMaster = await User.countDocuments({ isMaster: { $ne: true } });
-    const role = countNonMaster === 0 ? 'admin' : 'user';
     const userId = Date.now();
     const passwordHash = await bcrypt.hash(String(password), 12);
     const doc = await User.create({
@@ -48,9 +48,14 @@ router.post('/register', async (req, res) => {
       email: em,
       name: String(name).trim(),
       passwordHash,
-      role,
+      role: 'admin',
       isActive: true,
       isMaster: false,
+      tenantRootUserId: userId,
+    });
+    await Workspace.create({
+      tenantRootUserId: userId,
+      data: defaultWorkspaceData(),
     });
     const token = signToken({
       sub: doc.userId,
@@ -136,7 +141,7 @@ router.get('/users-for-master', async (req, res) => {
   if (!decoded || !decoded.isMaster) {
     return res.status(403).json({ error: 'Master only' });
   }
-  const list = await usersToClientShape();
+  const list = await usersToClientShapeAll();
   return res.json(list);
 });
 

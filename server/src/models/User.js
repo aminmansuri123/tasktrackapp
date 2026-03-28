@@ -9,6 +9,8 @@ const userSchema = new mongoose.Schema(
     role: { type: String, enum: ['admin', 'user'], default: 'user' },
     isActive: { type: Boolean, default: true },
     isMaster: { type: Boolean, default: false },
+    /** Org root admin userId; null for master account only. All tenant members share the same value. */
+    tenantRootUserId: { type: Number, default: null, index: true },
   },
   { timestamps: true }
 );

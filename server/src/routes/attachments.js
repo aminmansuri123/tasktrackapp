@@ -13,14 +13,28 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
+function tenantAttachmentKey(req) {
+  if (req.user.isMaster) {
+    return 'master';
+  }
+  if (req.user.tenantRootUserId != null && !Number.isNaN(req.user.tenantRootUserId)) {
+    return req.user.tenantRootUserId;
+  }
+  return req.user.userId;
+}
+
 router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
   try {
+    if (req.user.isMaster) {
+      return res.status(403).json({ error: 'Master account cannot upload attachments' });
+    }
     const locationId = req.body.locationId;
     const attachmentId = req.body.attachmentId;
     if (locationId === undefined || attachmentId === undefined || !req.file) {
       return res.status(400).json({ error: 'locationId, attachmentId, and file required' });
     }
-    await uploadAttachmentBuffer(locationId, attachmentId, req.file.buffer, req.file.mimetype);
+    const tenantKey = tenantAttachmentKey(req);
+    await uploadAttachmentBuffer(tenantKey, locationId, attachmentId, req.file.buffer, req.file.mimetype);
     return res.status(201).json({ ok: true, storedRemotely: true });
   } catch (e) {
     console.error(e);
@@ -30,8 +44,12 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
 
 router.get('/:locationId/:attachmentId', authMiddleware, async (req, res) => {
   try {
+    if (req.user.isMaster) {
+      return res.status(403).json({ error: 'Master account cannot download tenant attachments' });
+    }
     const { locationId, attachmentId } = req.params;
-    const result = await openDownloadStream(locationId, attachmentId);
+    const tenantKey = tenantAttachmentKey(req);
+    const result = await openDownloadStream(tenantKey, locationId, attachmentId);
     if (!result) {
       return res.status(404).json({ error: 'Not found' });
     }
@@ -48,8 +66,12 @@ router.get('/:locationId/:attachmentId', authMiddleware, async (req, res) => {
 
 router.delete('/:locationId/:attachmentId', authMiddleware, async (req, res) => {
   try {
+    if (req.user.isMaster) {
+      return res.status(403).json({ error: 'Master account cannot delete attachments' });
+    }
     const { locationId, attachmentId } = req.params;
-    await deleteAttachmentFile(locationId, attachmentId);
+    const tenantKey = tenantAttachmentKey(req);
+    await deleteAttachmentFile(tenantKey, locationId, attachmentId);
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);
