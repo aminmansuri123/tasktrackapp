@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Workspace = require('../models/Workspace');
-const { signToken } = require('../middleware/auth');
+const { signToken, authMiddleware } = require('../middleware/auth');
 const { isProduction } = require('../config');
 const { usersToClientShapeAll } = require('../services/userSync');
 const { defaultWorkspaceData } = require('../services/defaultWorkspace');
@@ -100,6 +100,25 @@ router.post('/login', async (req, res) => {
 router.post('/logout', (_req, res) => {
   res.clearCookie('auth_token', { path: '/', sameSite: isProduction ? 'none' : 'lax', secure: isProduction });
   res.json({ ok: true });
+});
+
+router.post('/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword || String(newPassword).length < 6) {
+      return res.status(400).json({ error: 'Current password and new password (min 6 characters) required' });
+    }
+    const doc = await User.findOne({ userId: req.user.userId });
+    if (!doc || !(await bcrypt.compare(String(currentPassword), doc.passwordHash))) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    doc.passwordHash = await bcrypt.hash(String(newPassword), 12);
+    await doc.save();
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Could not update password' });
+  }
 });
 
 router.get('/me', async (req, res) => {

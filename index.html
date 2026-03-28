@@ -1341,11 +1341,12 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Tracking System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.2</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.3</span></span>
             </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
                 <button type="button" id="masterToolsHint" class="master-tools-hint" style="display: none;" title="Open Settings">Master tools → Settings (⚙)</button>
+                <button type="button" id="changePasswordBtn" class="btn btn-secondary" style="display: none;" onclick="openChangePasswordModal()">Change password</button>
                 <button class="btn btn-secondary" onclick="logout()">Logout</button>
             </div>
         </div>
@@ -2151,7 +2152,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.2</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.3</span></p>
         </footer>
     </div>
 
@@ -2202,7 +2203,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.2</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.3</span></p>
                     </div>
                 </div>
             </div>
@@ -2413,6 +2414,34 @@
                     <button type="button" class="btn btn-secondary" onclick="closeUserModal()"
                         style="flex: 1;">Cancel</button>
                     <button type="submit" class="btn btn-primary" style="flex: 1;">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="changePasswordModal" class="modal">
+        <div class="modal-content" style="max-width: 420px;">
+            <div class="modal-header">
+                <h2>Change password</h2>
+                <button type="button" class="close-btn" onclick="closeChangePasswordModal()">&times;</button>
+            </div>
+            <form onsubmit="submitChangePassword(event)" style="padding: 20px;">
+                <div class="form-group">
+                    <label for="changePasswordCurrent">Current password</label>
+                    <input type="password" class="form-control" id="changePasswordCurrent" required autocomplete="current-password">
+                </div>
+                <div class="form-group">
+                    <label for="changePasswordNew">New password</label>
+                    <input type="password" class="form-control" id="changePasswordNew" required minlength="6" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="changePasswordConfirm">Confirm new password</label>
+                    <input type="password" class="form-control" id="changePasswordConfirm" required minlength="6" autocomplete="new-password">
+                </div>
+                <div id="changePasswordError" style="color: #c62828; font-size: 13px; margin-bottom: 12px;"></div>
+                <div style="display: flex; gap: 10px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeChangePasswordModal()" style="flex: 1;">Cancel</button>
+                    <button type="submit" class="btn btn-primary" style="flex: 1;">Update password</button>
                 </div>
             </form>
         </div>
@@ -2883,7 +2912,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=12.0.2"></script>
+    <script src="app.js?v=12.0.3"></script>
 </body>
 
 </html>

@@ -1,4 +1,41 @@
-const APP_VERSION = '12.0.2';
+const APP_VERSION = '12.0.3';
+
+/** Plaintext passwords for User rows not yet confirmed by a successful workspace sync (never in localStorage). */
+const __pendingPasswordsByUserId = new Map();
+
+function rememberPendingUserPasswordForSync(userId, plainPassword) {
+    if (!isApiMode() || plainPassword == null || String(plainPassword).length === 0) return;
+    const id = typeof userId === 'number' ? userId : parseInt(String(userId), 10);
+    if (Number.isNaN(id)) return;
+    __pendingPasswordsByUserId.set(id, String(plainPassword));
+}
+
+function clearPendingPasswordsForSync() {
+    __pendingPasswordsByUserId.clear();
+}
+
+function buildWorkspacePayloadForPut() {
+    const payload = JSON.parse(JSON.stringify(__workspaceCache));
+    if (payload.users && Array.isArray(payload.users)) {
+        for (const u of payload.users) {
+            const id = typeof u.id === 'number' ? u.id : parseInt(String(u.id), 10);
+            if (Number.isNaN(id)) continue;
+            const p = __pendingPasswordsByUserId.get(id);
+            if (p) u.password = p;
+        }
+    }
+    return payload;
+}
+
+function applyWorkspacePutSuccess(normalized) {
+    if (normalized && Array.isArray(normalized.users)) {
+        for (const u of normalized.users) {
+            const id = typeof u.id === 'number' ? u.id : parseInt(String(u.id), 10);
+            if (!Number.isNaN(id)) __pendingPasswordsByUserId.delete(id);
+        }
+    }
+    __workspaceCache = normalized;
+}
 
 // Data Storage
 let currentUser = null;
@@ -43,14 +80,15 @@ function scheduleWorkspacePush() {
 async function putWorkspaceCacheToServer() {
     if (!isApiMode() || !__workspaceCache) return false;
     try {
-        const res = await apiFetch('/api/workspace', { method: 'PUT', body: JSON.stringify(__workspaceCache) });
+        const payload = buildWorkspacePayloadForPut();
+        const res = await apiFetch('/api/workspace', { method: 'PUT', body: JSON.stringify(payload) });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             console.error('Workspace sync failed', err);
             return false;
         }
         const body = await res.json();
-        __workspaceCache = normalizeData(body);
+        applyWorkspacePutSuccess(normalizeData(body));
         return true;
     } catch (e) {
         console.error('Workspace sync error', e);
@@ -621,12 +659,16 @@ function checkAuth() {
                 });
             }
         }
+        const cpBtn = document.getElementById('changePasswordBtn');
+        if (cpBtn) cpBtn.style.display = isApiMode() ? 'inline-block' : 'none';
     } else {
         currentUser = null;
         document.body.classList.toggle('app-api-mode', isApiMode());
         document.getElementById('loginModal').classList.add('active');
         document.getElementById('currentUser').textContent = 'Guest';
         if (masterHint) masterHint.style.display = 'none';
+        const cpBtn = document.getElementById('changePasswordBtn');
+        if (cpBtn) cpBtn.style.display = 'none';
         const pw = document.getElementById('loginPassword');
         const em = document.getElementById('loginEmail');
         const nm = document.getElementById('loginName');
@@ -730,32 +772,39 @@ async function login() {
     }
 
     if (isApiMode()) {
+        let res;
         try {
-            const res = await apiFetch('/api/auth/login', {
+            res = await apiFetch('/api/auth/login', {
                 method: 'POST',
                 body: JSON.stringify({ email, password })
             });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                showError('loginError', err.error || 'Invalid email or password');
-                return;
-            }
-            const body = await res.json();
-            currentUser = body.user;
-            localStorage.setItem('currentUser', JSON.stringify(currentUser));
-            try {
-                await apiPullWorkspace();
-            } catch (pullErr) {
-                console.error('Workspace load after login:', pullErr);
-                __workspaceCache = normalizeData(defaultWorkspaceShell());
-            }
-            const lp = document.getElementById('loginPassword');
-            if (lp) lp.value = '';
-            checkAuth();
-            init();
         } catch (e) {
             console.error(e);
             showError('loginError', 'Could not reach server. Check API URL and network.');
+            return;
+        }
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showError('loginError', err.error || 'Invalid email or password');
+            return;
+        }
+        const body = await res.json();
+        currentUser = body.user;
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        try {
+            await apiPullWorkspace();
+        } catch (pullErr) {
+            console.error('Workspace load after login:', pullErr);
+            __workspaceCache = normalizeData(defaultWorkspaceShell());
+        }
+        const lp = document.getElementById('loginPassword');
+        if (lp) lp.value = '';
+        clearLoginFormError();
+        checkAuth();
+        try {
+            init();
+        } catch (initErr) {
+            console.error('init after login:', initErr);
         }
         return;
     }
@@ -797,32 +846,39 @@ async function register() {
     }
 
     if (isApiMode()) {
+        let res;
         try {
-            const res = await apiFetch('/api/auth/register', {
+            res = await apiFetch('/api/auth/register', {
                 method: 'POST',
                 body: JSON.stringify({ name, email, password })
             });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                showError('loginError', err.error || 'Registration failed');
-                return;
-            }
-            const body = await res.json();
-            currentUser = body.user;
-            localStorage.setItem('currentUser', JSON.stringify(currentUser));
-            try {
-                await apiPullWorkspace();
-            } catch (pullErr) {
-                console.error('Workspace load after register:', pullErr);
-                __workspaceCache = normalizeData(defaultWorkspaceShell());
-            }
-            const lp = document.getElementById('loginPassword');
-            if (lp) lp.value = '';
-            checkAuth();
-            init();
         } catch (e) {
             console.error(e);
             showError('loginError', 'Could not reach server. Check API URL and network.');
+            return;
+        }
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showError('loginError', err.error || 'Registration failed');
+            return;
+        }
+        const body = await res.json();
+        currentUser = body.user;
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        try {
+            await apiPullWorkspace();
+        } catch (pullErr) {
+            console.error('Workspace load after register:', pullErr);
+            __workspaceCache = normalizeData(defaultWorkspaceShell());
+        }
+        const lp = document.getElementById('loginPassword');
+        if (lp) lp.value = '';
+        clearLoginFormError();
+        checkAuth();
+        try {
+            init();
+        } catch (initErr) {
+            console.error('init after register:', initErr);
         }
         return;
     }
@@ -856,6 +912,62 @@ async function register() {
 
 window.setLoginPanelMode = setLoginPanelMode;
 window.submitLoginPanel = submitLoginPanel;
+window.openChangePasswordModal = openChangePasswordModal;
+window.closeChangePasswordModal = closeChangePasswordModal;
+window.submitChangePassword = submitChangePassword;
+
+function openChangePasswordModal() {
+    if (!isApiMode() || !currentUser) return;
+    const err = document.getElementById('changePasswordError');
+    if (err) err.textContent = '';
+    const c = document.getElementById('changePasswordCurrent');
+    const n = document.getElementById('changePasswordNew');
+    const q = document.getElementById('changePasswordConfirm');
+    if (c) c.value = '';
+    if (n) n.value = '';
+    if (q) q.value = '';
+    const m = document.getElementById('changePasswordModal');
+    if (m) m.classList.add('active');
+}
+
+function closeChangePasswordModal() {
+    const m = document.getElementById('changePasswordModal');
+    if (m) m.classList.remove('active');
+}
+
+async function submitChangePassword(event) {
+    event.preventDefault();
+    const errEl = document.getElementById('changePasswordError');
+    if (errEl) errEl.textContent = '';
+    const currentPassword = document.getElementById('changePasswordCurrent')?.value || '';
+    const newPassword = document.getElementById('changePasswordNew')?.value || '';
+    const confirm = document.getElementById('changePasswordConfirm')?.value || '';
+    if (newPassword.length < 6) {
+        if (errEl) errEl.textContent = 'New password must be at least 6 characters.';
+        return;
+    }
+    if (newPassword !== confirm) {
+        if (errEl) errEl.textContent = 'New password and confirmation do not match.';
+        return;
+    }
+    try {
+        const res = await apiFetch('/api/auth/change-password', {
+            method: 'POST',
+            body: JSON.stringify({ currentPassword, newPassword })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            if (errEl) errEl.textContent = err.error || 'Could not update password.';
+            return;
+        }
+        __pendingPasswordsByUserId.delete(Number(currentUser.id));
+        closeChangePasswordModal();
+        alert('Password updated. Use your new password next time you sign in on another device.');
+    } catch (e) {
+        console.error(e);
+        if (errEl) errEl.textContent = 'Network error. Check connection and API URL.';
+    }
+}
 
 async function logout() {
     if (isApiMode()) {
@@ -865,6 +977,7 @@ async function logout() {
             /* ignore */
         }
         __workspaceCache = null;
+        clearPendingPasswordsForSync();
     }
     localStorage.removeItem('currentUser');
     currentUser = null;
@@ -878,6 +991,11 @@ function showError(elementId, message) {
     setTimeout(() => {
         element.innerHTML = '';
     }, 3000);
+}
+
+function clearLoginFormError() {
+    const el = document.getElementById('loginError');
+    if (el) el.innerHTML = '';
 }
 
 // Tab Navigation
@@ -5126,6 +5244,7 @@ function saveUser(event) {
                 user.email = document.getElementById('userEmail').value;
                 if (password) {
                     user.password = password;
+                    rememberPendingUserPasswordForSync(parseInt(userId, 10), password);
                 }
                 user.is_active = document.getElementById('userIsActive').checked;
             }
@@ -5139,6 +5258,7 @@ function saveUser(event) {
                 is_active: document.getElementById('userIsActive').checked
             };
             data.users.push(newUser);
+            rememberPendingUserPasswordForSync(newUser.id, password);
         }
     });
 
@@ -5155,6 +5275,7 @@ function deleteUser(userId) {
     const uid = typeof userId === 'number' ? userId : parseInt(String(userId), 10);
     if (Number.isNaN(uid)) return;
 
+    __pendingPasswordsByUserId.delete(uid);
     updateData(data => {
         data.users = data.users.filter(u => Number(u.id) !== uid);
         data.tasks = data.tasks.filter(t => Number(t.assigned_to) !== uid && Number(t.created_by) !== uid);
