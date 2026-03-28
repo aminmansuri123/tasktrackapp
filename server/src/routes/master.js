@@ -43,11 +43,11 @@ router.post('/users', authMiddleware, requireMaster, async (req, res) => {
       const raw = orgAdminUserId;
       const pickerId = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
       if (Number.isNaN(pickerId)) {
-        return res.status(400).json({ error: 'Select an organization admin' });
+        return res.status(400).json({ error: 'Select an account admin' });
       }
       const tenantRoot = await resolveTenantRootFromAdminPicker(pickerId);
       if (tenantRoot == null) {
-        return res.status(400).json({ error: 'Invalid organization admin' });
+        return res.status(400).json({ error: 'Invalid account admin' });
       }
       const doc = await User.create({
         userId,
@@ -127,11 +127,11 @@ router.patch('/users/:userId', authMiddleware, requireMaster, async (req, res) =
       const pickerId =
         typeof orgAdminUserId === 'number' ? orgAdminUserId : parseInt(String(orgAdminUserId), 10);
       if (Number.isNaN(pickerId)) {
-        return res.status(400).json({ error: 'Invalid organization admin' });
+        return res.status(400).json({ error: 'Invalid account admin' });
       }
       const tenantRoot = await resolveTenantRootFromAdminPicker(pickerId);
       if (tenantRoot == null) {
-        return res.status(400).json({ error: 'Invalid organization admin' });
+        return res.status(400).json({ error: 'Invalid account admin' });
       }
       target.tenantRootUserId = tenantRoot;
     }

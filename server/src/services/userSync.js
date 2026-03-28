@@ -151,7 +151,33 @@ async function allocateUniqueUserId(preferred) {
  * are accepted. If the payload lists users but none parse to valid ids, skip (avoid wiping
  * the tenant). Tenant root user is always kept.
  */
-async function deleteUsersNotInPayload(allowedUserIdsRaw, tenantRootUserId) {
+/**
+ * User ids that appeared on the last persisted workspace `data.users` roster.
+ * Used to avoid deleting Mongo users who were never on that snapshot (e.g. self-registered
+ * account users) when an admin's browser sends a stale PUT without them.
+ */
+function previousWorkspaceUserIdSet(usersArray) {
+  const s = new Set();
+  if (!Array.isArray(usersArray)) return s;
+  for (const u of usersArray) {
+    const n = coerceTenantUserId(u && u.id);
+    if (n != null) s.add(n);
+  }
+  return s;
+}
+
+/**
+ * @param {Set<number>|null|undefined} previousWorkspaceUserIds - When replaceAllTenantUsers is false,
+ *   only delete Mongo users who were listed on the persisted workspace roster and are now missing
+ *   from the client payload (avoids wiping self-registered account users the admin UI never saved).
+ * @param {boolean} [replaceAllTenantUsers] - True for backup restore: delete anyone not in allowed.
+ */
+async function deleteUsersNotInPayload(
+  allowedUserIdsRaw,
+  tenantRootUserId,
+  previousWorkspaceUserIds,
+  replaceAllTenantUsers
+) {
   if (tenantRootUserId == null || !Number.isFinite(tenantRootUserId)) return;
   if (!Array.isArray(allowedUserIdsRaw)) return;
 
@@ -174,6 +200,16 @@ async function deleteUsersNotInPayload(allowedUserIdsRaw, tenantRootUserId) {
     if (u.isMaster) continue;
     if (u.userId === tenantRootUserId) continue;
     if (!allowed.has(u.userId)) {
+      if (replaceAllTenantUsers === true) {
+        await User.deleteOne({ _id: u._id });
+        continue;
+      }
+      if (!(previousWorkspaceUserIds instanceof Set) || previousWorkspaceUserIds.size === 0) {
+        continue;
+      }
+      if (!previousWorkspaceUserIds.has(u.userId)) {
+        continue;
+      }
       await User.deleteOne({ _id: u._id });
     }
   }
@@ -186,4 +222,6 @@ module.exports = {
   syncUsersFromClientPayload,
   deleteUsersNotInPayload,
   allocateUniqueUserId,
+  coerceTenantUserId,
+  previousWorkspaceUserIdSet,
 };

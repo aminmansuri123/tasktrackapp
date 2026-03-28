@@ -1,4 +1,4 @@
-const APP_VERSION = '12.0.7';
+const APP_VERSION = '12.0.8';
 
 let __loginErrorDismissTimer = null;
 
@@ -780,7 +780,7 @@ function updateLoginScreenCopy() {
         const modal = document.getElementById('loginModal');
         const mode = (modal && modal.getAttribute('data-login-mode')) || 'signin';
         if (mode === 'register') {
-            sub.textContent = 'Choose organization admin (new org + workspace) or team user (join an existing admin). Cloud signup uses the server.';
+            sub.textContent = 'Account admin creates a new workspace; account user joins an existing admin. Cloud signup uses the server.';
         } else if (mode === 'master') {
             sub.textContent = 'Master sign-in for cross-tenant support tools only.';
         } else {
@@ -836,7 +836,7 @@ function loadLocalOrgAdminsForRegisterDropdown() {
     if (!sel) return;
     const data = getData();
     const admins = (data.users || []).filter(u => u.role === 'admin' && !isMasterUserRecord(u));
-    sel.innerHTML = '<option value="">Select an admin…</option>'
+    sel.innerHTML = '<option value="">Select account admin…</option>'
         + admins.map(u => `<option value="${u.id}">${escapeHtml(u.name)} (${escapeHtml(u.email)})</option>`).join('');
     updateLoginRegistrationFieldsVisibility();
 }
@@ -850,14 +850,14 @@ async function loadOrgAdminsForRegisterDropdown() {
         if (!res.ok) throw new Error('load failed');
         const list = await res.json();
         if (!Array.isArray(list) || list.length === 0) {
-            sel.innerHTML = '<option value="">No organization admins yet — register as admin first</option>';
+            sel.innerHTML = '<option value="">No account admins yet — register as account admin first</option>';
         } else {
             const opts = list.map(a => `<option value="${a.id}">${escapeHtml(a.name)} (${escapeHtml(a.email)})</option>`).join('');
-            sel.innerHTML = `<option value="">Select an admin…</option>${opts}`;
+            sel.innerHTML = `<option value="">Select account admin…</option>${opts}`;
         }
     } catch (e) {
         console.error(e);
-        sel.innerHTML = '<option value="">Could not load admins</option>';
+        sel.innerHTML = '<option value="">Could not load account admins</option>';
     }
     updateLoginRegistrationFieldsVisibility();
 }
@@ -1001,7 +1001,7 @@ async function register() {
         const sel = document.getElementById('loginOrgAdminSelect');
         orgAdminUserId = sel ? parseInt(sel.value, 10) : NaN;
         if (Number.isNaN(orgAdminUserId) || orgAdminUserId <= 0) {
-            showError('loginError', 'Select an organization admin for team signup.');
+            showError('loginError', 'Select an account admin for account user signup.');
             return;
         }
     }
@@ -1106,7 +1106,7 @@ async function register() {
         const adminUser = data.users.find(u =>
             Number(u.id) === orgAdminUserId && u.role === 'admin' && !isMasterUserRecord(u));
         if (!adminUser) {
-            showError('loginError', 'Invalid organization admin.');
+            showError('loginError', 'Invalid account admin.');
             return;
         }
         newUser = {
@@ -5619,9 +5619,9 @@ function renderSettings() {
                 </div>
                 <button type="button" class="btn btn-primary" onclick="saveMasterRegistrationPolicy()">Save registration rules</button>
                 <h3 style="margin-top:24px;">Cross-tenant user management</h3>
-                <p style="color:#666;font-size:13px;">Add organization admins or team users, delete accounts, set admin vs user role, or move a user under another organization admin.</p>
+                <p style="color:#666;font-size:13px;">Add account admins or account users, delete accounts, change admin vs user role, or move a user under another account admin.</p>
                 <div class="form-group" style="margin-top:12px;">
-                    <label>1 — Add organization admin (new tenant)</label>
+                    <label>1 — Add account admin (new tenant)</label>
                     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
                         <input type="text" id="masterNewAdminName" class="form-control" placeholder="Name" style="min-width:130px;">
                         <input type="email" id="masterNewAdminEmail" class="form-control" placeholder="Email" style="min-width:160px;">
@@ -5630,13 +5630,13 @@ function renderSettings() {
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>2 — Add team user</label>
+                    <label>2 — Add account user</label>
                     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
                         <input type="text" id="masterNewUserName" class="form-control" placeholder="Name" style="min-width:130px;">
                         <input type="email" id="masterNewUserEmail" class="form-control" placeholder="Email" style="min-width:160px;">
                         <input type="password" id="masterNewUserPassword" class="form-control" placeholder="Password" style="min-width:120px;" autocomplete="new-password">
                         <select id="masterNewUserOrgAdmin" class="form-control" style="min-width:200px;">
-                            <option value="">Organization admin…</option>${orgAdminOptsForMaster}
+                            <option value="">Account admin…</option>${orgAdminOptsForMaster}
                         </select>
                         <button type="button" class="btn btn-primary" onclick="masterApiCreateTeamUser()">Create user</button>
                     </div>
@@ -5655,7 +5655,7 @@ function renderSettings() {
                     </select>
                     <button type="button" class="btn btn-secondary" onclick="masterApiPatchUserRole()">Apply role</button>
                     <select id="masterManageMoveOrg" class="form-control" style="min-width:200px;">
-                        <option value="">5 — Move to org…</option>${orgAdminOptsForMaster}
+                        <option value="">5 — Move to account admin…</option>${orgAdminOptsForMaster}
                     </select>
                     <button type="button" class="btn btn-secondary" onclick="masterApiMoveUserOrg()">Apply org</button>
                 </div>
@@ -5836,7 +5836,7 @@ async function masterApiCreateOrgAdmin() {
         document.getElementById('masterNewAdminName').value = '';
         document.getElementById('masterNewAdminEmail').value = '';
         document.getElementById('masterNewAdminPassword').value = '';
-        alert('Organization admin created.');
+        alert('Account admin created.');
         await masterRefreshAfterUserChange();
     } catch (e) {
         console.error(e);
@@ -5856,7 +5856,7 @@ async function masterApiCreateTeamUser() {
         return;
     }
     if (Number.isNaN(orgAdminUserId) || orgAdminUserId <= 0) {
-        alert('Select an organization admin.');
+        alert('Select an account admin.');
         return;
     }
     try {
@@ -5878,7 +5878,7 @@ async function masterApiCreateTeamUser() {
         document.getElementById('masterNewUserName').value = '';
         document.getElementById('masterNewUserEmail').value = '';
         document.getElementById('masterNewUserPassword').value = '';
-        alert('Team user created.');
+        alert('Account user created.');
         await masterRefreshAfterUserChange();
     } catch (e) {
         console.error(e);
@@ -5953,7 +5953,7 @@ async function masterApiMoveUserOrg() {
         return;
     }
     if (Number.isNaN(orgAdminUserId) || orgAdminUserId <= 0) {
-        alert('Select an organization admin to move the user under.');
+        alert('Select an account admin to move the user under.');
         return;
     }
     try {
@@ -5966,7 +5966,7 @@ async function masterApiMoveUserOrg() {
             alert(err.error || 'Update failed');
             return;
         }
-        alert('User moved to that organization.');
+        alert('User moved under that account admin.');
         await masterRefreshAfterUserChange();
     } catch (e) {
         console.error(e);

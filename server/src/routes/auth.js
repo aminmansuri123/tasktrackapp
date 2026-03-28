@@ -57,7 +57,7 @@ router.get('/org-admins', async (_req, res) => {
     );
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: 'Failed to load organization admins' });
+    return res.status(500).json({ error: 'Failed to load account admins' });
   }
 });
 
@@ -85,11 +85,11 @@ router.post('/register', async (req, res) => {
       const raw = req.body?.orgAdminUserId;
       const pickerId = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
       if (Number.isNaN(pickerId)) {
-        return res.status(400).json({ error: 'Select an organization admin' });
+        return res.status(400).json({ error: 'Select an account admin' });
       }
       const tenantRoot = await resolveTenantRootFromAdminPicker(pickerId);
       if (tenantRoot == null) {
-        return res.status(400).json({ error: 'Invalid organization admin' });
+        return res.status(400).json({ error: 'Invalid account admin' });
       }
       doc = await User.create({
         userId,

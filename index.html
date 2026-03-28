@@ -1350,7 +1350,7 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Tracking System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.7</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.8</span></span>
             </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
@@ -2067,7 +2067,7 @@
                         <button type="button" class="btn btn-primary" id="settingsAddUserBtn" onclick="openUserModal()">+ Add User</button>
                     </div>
                     <p style="color:#666;font-size:13px;margin-bottom:12px;line-height:1.55;">
-                        <span class="storage-hint-cloud"><strong>How accounts work:</strong> “Create account” on the login screen registers a new <strong>organization admin</strong> (their own workspace on the server). That admin adds <strong>users</strong> here for their team. <strong>Admins assign tasks only to users in this list</strong> (your organization). Regular users only assign tasks to themselves.</span>
+                        <span class="storage-hint-cloud"><strong>How accounts work:</strong> “Create account” can register an <strong>account admin</strong> (new workspace) or an <strong>account user</strong> under an existing admin. Admins assign tasks to users in your org list. Regular users only assign tasks to themselves.</span>
                         <span class="storage-hint-local"><strong>Local mode:</strong> Without an API URL in <code>config.js</code>, data stays in this browser. Use “Create account” for a local admin, then add users here.</span>
                     </p>
                     <table class="table">
@@ -2161,7 +2161,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.7</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.8</span></p>
         </footer>
     </div>
 
@@ -2203,12 +2203,12 @@
                     <div id="loginAccountTypeGroup" class="form-group hidden">
                         <label for="loginAccountType">Account type</label>
                         <select id="loginAccountType" class="form-control">
-                            <option value="org_admin">Organization admin (new organization)</option>
-                            <option value="team_user">Team user (under an existing admin)</option>
+                            <option value="org_admin">1 — Account admin (new workspace)</option>
+                            <option value="team_user">2 — Account user (under an account admin)</option>
                         </select>
                     </div>
                     <div id="loginOrgAdminGroup" class="form-group hidden">
-                        <label for="loginOrgAdminSelect">Organization admin</label>
+                        <label for="loginOrgAdminSelect">Account admin</label>
                         <select id="loginOrgAdminSelect" class="form-control">
                             <option value="">Select an admin…</option>
                         </select>
@@ -2225,7 +2225,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.7</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.8</span></p>
                     </div>
                 </div>
             </div>
@@ -2934,7 +2934,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=12.0.7"></script>
+    <script src="app.js?v=12.0.8"></script>
 </body>
 
 </html>

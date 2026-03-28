@@ -9,11 +9,12 @@ const {
   deleteUsersNotInPayload,
   usersToClientShapeForTenant,
   usersToClientShapeAll,
+  previousWorkspaceUserIdSet,
 } = require('../services/userSync');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '12.0.7';
+const EXPORT_VERSION = '12.0.8';
 
 function resolveTenantRoot(req) {
   if (req.user.isMaster) return null;
@@ -83,7 +84,7 @@ router.post('/restore', authMiddleware, async (req, res) => {
     await ws.save();
     await syncUsersFromClientPayload(complete.users, { isAdmin: true, tenantRootUserId: tenantRoot });
     if (Array.isArray(complete.users) && complete.users.length > 0) {
-      await deleteUsersNotInPayload(complete.users.map((u) => u.id), tenantRoot);
+      await deleteUsersNotInPayload(complete.users.map((u) => u.id), tenantRoot, null, true);
     }
     const normalized = normalizeWorkspacePayload(ws.data);
     normalized.users = await usersToClientShapeForTenant(tenantRoot);
@@ -147,11 +148,14 @@ router.put('/', authMiddleware, async (req, res) => {
       merged.holidays = existingNormalized.holidays;
     } else {
       const incomingUsers = incoming.users;
+      const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
       await syncUsersFromClientPayload(incomingUsers, { isAdmin: true, tenantRootUserId: tenantRoot });
       if (Array.isArray(incomingUsers) && incomingUsers.length > 0) {
         await deleteUsersNotInPayload(
           incomingUsers.map((u) => u.id),
-          tenantRoot
+          tenantRoot,
+          previousUserIds,
+          false
         );
       }
     }
