@@ -14,18 +14,27 @@ function verifyToken(token) {
   }
 }
 
-async function authMiddleware(req, res, next) {
+/** Prefer a valid cookie; if cookie is missing or expired, accept Authorization Bearer (cross-site cookie fallback). */
+function resolveAuthDecoded(req) {
   const raw = req.cookies?.auth_token || '';
   const bearer = req.headers.authorization?.startsWith('Bearer ')
     ? req.headers.authorization.slice(7)
     : '';
-  const token = raw || bearer;
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  if (raw) {
+    const d = verifyToken(raw);
+    if (d && d.sub !== undefined && d.sub !== null) return d;
   }
-  const decoded = verifyToken(token);
-  if (!decoded || decoded.sub === undefined || decoded.sub === null) {
-    return res.status(401).json({ error: 'Invalid token' });
+  if (bearer) {
+    const d = verifyToken(bearer);
+    if (d && d.sub !== undefined && d.sub !== null) return d;
+  }
+  return null;
+}
+
+async function authMiddleware(req, res, next) {
+  const decoded = resolveAuthDecoded(req);
+  if (!decoded) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
   const userId = typeof decoded.sub === 'number' ? decoded.sub : parseInt(String(decoded.sub), 10);
   if (Number.isNaN(userId)) {
@@ -45,22 +54,15 @@ async function authMiddleware(req, res, next) {
 }
 
 function optionalAuth(req, res, next) {
-  const raw = req.cookies?.auth_token || '';
-  const bearer = req.headers.authorization?.startsWith('Bearer ')
-    ? req.headers.authorization.slice(7)
-    : '';
-  const token = raw || bearer;
-  if (token) {
-    const decoded = verifyToken(token);
-    if (decoded && decoded.sub) {
-      req.user = {
-        userId: typeof decoded.sub === 'number' ? decoded.sub : parseInt(String(decoded.sub), 10),
-        role: decoded.role,
-        isMaster: !!decoded.isMaster,
-      };
-    }
+  const decoded = resolveAuthDecoded(req);
+  if (decoded && decoded.sub !== undefined && decoded.sub !== null) {
+    req.user = {
+      userId: typeof decoded.sub === 'number' ? decoded.sub : parseInt(String(decoded.sub), 10),
+      role: decoded.role,
+      isMaster: !!decoded.isMaster,
+    };
   }
   next();
 }
 
-module.exports = { authMiddleware, optionalAuth, signToken, verifyToken };
+module.exports = { authMiddleware, optionalAuth, signToken, verifyToken, resolveAuthDecoded };

@@ -1,11 +1,10 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
-const Workspace = require('../models/Workspace');
-const { signToken, authMiddleware } = require('../middleware/auth');
+const { signToken, authMiddleware, resolveAuthDecoded } = require('../middleware/auth');
+const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const { isProduction } = require('../config');
 const { usersToClientShapeAll } = require('../services/userSync');
-const { defaultWorkspaceData } = require('../services/defaultWorkspace');
 
 const router = express.Router();
 
@@ -53,19 +52,23 @@ router.post('/register', async (req, res) => {
       isMaster: false,
       tenantRootUserId: userId,
     });
-    await Workspace.create({
-      tenantRootUserId: userId,
-      data: defaultWorkspaceData(),
-    });
+    await ensureWorkspaceForTenantRoot(userId);
     const token = signToken({
       sub: doc.userId,
       role: doc.role,
       isMaster: doc.isMaster,
     });
     res.cookie('auth_token', token, cookieOptions());
-    return res.status(201).json({ user: publicUser(doc) });
+    return res.status(201).json({ user: publicUser(doc), token });
   } catch (e) {
     console.error(e);
+    if (e && e.code === 11000) {
+      const dupKey = e.keyPattern && Object.keys(e.keyPattern)[0];
+      if (dupKey === 'email') {
+        return res.status(400).json({ error: 'Email already registered' });
+      }
+      return res.status(409).json({ error: 'Account setup conflict — try signing in' });
+    }
     return res.status(500).json({ error: 'Registration failed' });
   }
 });
@@ -90,7 +93,7 @@ router.post('/login', async (req, res) => {
       isMaster: doc.isMaster,
     });
     res.cookie('auth_token', token, cookieOptions());
-    return res.json({ user: publicUser(doc) });
+    return res.json({ user: publicUser(doc), token });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Login failed' });
@@ -122,18 +125,9 @@ router.post('/change-password', authMiddleware, async (req, res) => {
 });
 
 router.get('/me', async (req, res) => {
-  const raw = req.cookies?.auth_token || '';
-  const bearer = req.headers.authorization?.startsWith('Bearer ')
-    ? req.headers.authorization.slice(7)
-    : '';
-  const token = raw || bearer;
-  if (!token) {
+  const decoded = resolveAuthDecoded(req);
+  if (!decoded) {
     return res.status(401).json({ error: 'Not logged in' });
-  }
-  const { verifyToken } = require('../middleware/auth');
-  const decoded = verifyToken(token);
-  if (!decoded || decoded.sub === undefined || decoded.sub === null) {
-    return res.status(401).json({ error: 'Invalid session' });
   }
   const userId = typeof decoded.sub === 'number' ? decoded.sub : parseInt(String(decoded.sub), 10);
   if (Number.isNaN(userId)) {
@@ -147,17 +141,11 @@ router.get('/me', async (req, res) => {
 });
 
 router.get('/users-for-master', async (req, res) => {
-  const raw = req.cookies?.auth_token || '';
-  const bearer = req.headers.authorization?.startsWith('Bearer ')
-    ? req.headers.authorization.slice(7)
-    : '';
-  const token = raw || bearer;
-  if (!token) {
+  const decoded = resolveAuthDecoded(req);
+  if (!decoded) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const { verifyToken } = require('../middleware/auth');
-  const decoded = verifyToken(token);
-  if (!decoded || !decoded.isMaster) {
+  if (!decoded.isMaster) {
     return res.status(403).json({ error: 'Master only' });
   }
   const list = await usersToClientShapeAll();

@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Workspace = require('../models/Workspace');
 const { authMiddleware } = require('../middleware/auth');
 const { defaultWorkspaceData, normalizeWorkspacePayload } = require('../services/defaultWorkspace');
+const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const {
   syncUsersFromClientPayload,
   deleteUsersNotInPayload,
@@ -12,7 +13,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '12.0.4';
+const EXPORT_VERSION = '12.0.5';
 
 function resolveTenantRoot(req) {
   if (req.user.isMaster) return null;
@@ -20,14 +21,6 @@ function resolveTenantRoot(req) {
     return req.user.tenantRootUserId;
   }
   return req.user.userId;
-}
-
-async function findOrCreateWorkspace(tenantRootUserId) {
-  if (tenantRootUserId == null) return null;
-  let ws = await Workspace.findOne({ tenantRootUserId });
-  if (ws) return ws;
-  const data = defaultWorkspaceData();
-  return Workspace.create({ tenantRootUserId, data });
 }
 
 router.get('/backup', authMiddleware, async (req, res) => {
@@ -39,7 +32,7 @@ router.get('/backup', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Use a tenant admin account for workspace backup' });
     }
     const tenantRoot = resolveTenantRoot(req);
-    const ws = await findOrCreateWorkspace(tenantRoot);
+    const ws = await ensureWorkspaceForTenantRoot(tenantRoot);
     if (!ws) {
       return res.status(404).json({ error: 'No workspace' });
     }
@@ -74,12 +67,20 @@ router.post('/restore', authMiddleware, async (req, res) => {
     const complete = normalizeWorkspacePayload(imported);
     let ws = await Workspace.findOne({ tenantRootUserId: tenantRoot });
     if (!ws) {
-      ws = await Workspace.create({ tenantRootUserId: tenantRoot, data: complete });
-    } else {
-      ws.data = complete;
-      ws.markModified('data');
-      await ws.save();
+      try {
+        ws = await Workspace.create({ tenantRootUserId: tenantRoot, data: complete });
+      } catch (e) {
+        if (e && e.code === 11000) {
+          ws = await Workspace.findOne({ tenantRootUserId: tenantRoot });
+        } else throw e;
+      }
     }
+    if (!ws) {
+      return res.status(500).json({ error: 'Restore failed' });
+    }
+    ws.data = complete;
+    ws.markModified('data');
+    await ws.save();
     await syncUsersFromClientPayload(complete.users, { isAdmin: true, tenantRootUserId: tenantRoot });
     if (Array.isArray(complete.users) && complete.users.length > 0) {
       await deleteUsersNotInPayload(complete.users.map((u) => u.id), tenantRoot);
@@ -102,12 +103,9 @@ router.get('/', authMiddleware, async (req, res) => {
     }
 
     const tenantRoot = resolveTenantRoot(req);
-    let ws = await findOrCreateWorkspace(tenantRoot);
-
+    const ws = await ensureWorkspaceForTenantRoot(tenantRoot);
     if (!ws) {
-      const data = defaultWorkspaceData();
-      data.users = await usersToClientShapeForTenant(tenantRoot);
-      ws = await Workspace.create({ tenantRootUserId: tenantRoot, data });
+      return res.status(500).json({ error: 'Failed to load workspace' });
     }
 
     const normalized = normalizeWorkspacePayload(ws.data);
@@ -132,10 +130,9 @@ router.put('/', authMiddleware, async (req, res) => {
     const isAdmin = doc.role === 'admin';
     const tenantRoot = resolveTenantRoot(req);
 
-    let ws = await Workspace.findOne({ tenantRootUserId: tenantRoot });
+    const ws = await ensureWorkspaceForTenantRoot(tenantRoot);
     if (!ws) {
-      const data = defaultWorkspaceData();
-      ws = await Workspace.create({ tenantRootUserId: tenantRoot, data });
+      return res.status(500).json({ error: 'Failed to save workspace' });
     }
 
     const existingNormalized = normalizeWorkspacePayload(ws.data);

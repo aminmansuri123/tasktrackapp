@@ -1,9 +1,21 @@
-const APP_VERSION = '12.0.4';
+const APP_VERSION = '12.0.5';
 
 let __loginErrorDismissTimer = null;
 
 /** Plaintext passwords for User rows not yet confirmed by a successful workspace sync (never in localStorage). */
 const __pendingPasswordsByUserId = new Map();
+
+const API_AUTH_TOKEN_KEY = 'tasktrack_api_auth_token';
+
+function setApiAuthToken(token) {
+    if (token && typeof token === 'string') {
+        localStorage.setItem(API_AUTH_TOKEN_KEY, token);
+    }
+}
+
+function clearApiAuthToken() {
+    localStorage.removeItem(API_AUTH_TOKEN_KEY);
+}
 
 function rememberPendingUserPasswordForSync(userId, plainPassword) {
     if (!isApiMode() || plainPassword == null || String(plainPassword).length === 0) return;
@@ -63,6 +75,10 @@ async function apiFetch(path, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json';
+    }
+    const bearer = localStorage.getItem(API_AUTH_TOKEN_KEY);
+    if (bearer && !headers.Authorization) {
+        headers.Authorization = `Bearer ${bearer}`;
     }
     return fetch(url, { ...options, credentials: 'include', headers });
 }
@@ -792,8 +808,19 @@ async function login() {
             return;
         }
         if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            showError('loginError', err.error || 'Invalid email or password');
+            let errMsg = `Sign-in failed (${res.status})`;
+            try {
+                const t = await res.text();
+                if (t) {
+                    try {
+                        const j = JSON.parse(t);
+                        if (j.error) errMsg = j.error;
+                    } catch {
+                        errMsg = t.slice(0, 200);
+                    }
+                }
+            } catch (_) { /* ignore */ }
+            showError('loginError', errMsg);
             return;
         }
         let body;
@@ -835,6 +862,7 @@ async function login() {
             return;
         }
         currentUser = body.user;
+        if (body.token) setApiAuthToken(body.token);
         localStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
             await apiPullWorkspace();
@@ -903,8 +931,19 @@ async function register() {
             return;
         }
         if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            showError('loginError', err.error || 'Registration failed');
+            let errMsg = `Registration failed (${res.status})`;
+            try {
+                const t = await res.text();
+                if (t) {
+                    try {
+                        const j = JSON.parse(t);
+                        if (j.error) errMsg = j.error;
+                    } catch {
+                        errMsg = t.slice(0, 200);
+                    }
+                }
+            } catch (_) { /* ignore */ }
+            showError('loginError', errMsg);
             return;
         }
         let body;
@@ -946,6 +985,7 @@ async function register() {
             return;
         }
         currentUser = body.user;
+        if (body.token) setApiAuthToken(body.token);
         localStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
             await apiPullWorkspace();
@@ -1061,6 +1101,7 @@ async function logout() {
         __workspaceCache = null;
         clearPendingPasswordsForSync();
     }
+    clearApiAuthToken();
     localStorage.removeItem('currentUser');
     currentUser = null;
     document.body.classList.remove('user-admin');
@@ -5349,7 +5390,7 @@ async function saveUser(event) {
             }
         } else {
             const newUser = {
-                id: Date.now(),
+                id: Date.now() * 1000 + Math.floor(Math.random() * 1000),
                 name: document.getElementById('userName').value,
                 email: document.getElementById('userEmail').value,
                 password: password,
@@ -9887,6 +9928,7 @@ async function bootstrapApp() {
             console.warn('API bootstrap fetch failed', fetchErr);
             currentUser = null;
             __workspaceCache = null;
+            clearApiAuthToken();
             localStorage.removeItem('currentUser');
             checkAuth();
             init();
@@ -9899,6 +9941,7 @@ async function bootstrapApp() {
             } catch (parseErr) {
                 console.warn('Bootstrap /me parse failed', parseErr);
                 currentUser = null;
+                clearApiAuthToken();
                 localStorage.removeItem('currentUser');
                 __workspaceCache = null;
                 checkAuth();
@@ -9914,6 +9957,7 @@ async function bootstrapApp() {
             }
         } else {
             currentUser = null;
+            clearApiAuthToken();
             localStorage.removeItem('currentUser');
             __workspaceCache = null;
         }
