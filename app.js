@@ -1,4 +1,4 @@
-const APP_VERSION = '12.0.1';
+const APP_VERSION = '12.0.2';
 
 // Data Storage
 let currentUser = null;
@@ -111,7 +111,10 @@ async function uploadRemoteAttachment(locationId, attachmentId, blob, filename, 
         credentials: 'include',
         body: fd
     });
-    if (!res.ok) throw new Error('Attachment upload failed');
+    if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(errText || `Attachment upload failed (${res.status})`);
+    }
 }
 
 function dataUrlToBlob(dataUrl) {
@@ -322,6 +325,25 @@ function usersVisibleInPickers() {
     return list.filter(u => !isMasterUserRecord(u));
 }
 
+/**
+ * Users an admin may assign tasks to. Tenant admins use workspace-scoped users only.
+ * Master account sees all users in GET /workspace — restrict assignment to self only.
+ * Non-admin users may only pick themselves.
+ */
+function taskAssigneePickerUsers() {
+    if (!currentUser) return [];
+    if (currentUser.isMaster) {
+        const data = getData();
+        return (data.users || []).filter(u => u.is_active !== false && (u.isMaster === true || u.id === currentUser.id));
+    }
+    if (currentUser.role !== 'admin') {
+        const data = getData();
+        const self = (data.users || []).find(u => Number(u.id) === Number(currentUser.id));
+        return self && self.is_active !== false ? [self] : [];
+    }
+    return usersVisibleInPickers();
+}
+
 // Utility function to escape CSV values
 function escapeCSV(value) {
     if (value === null || value === undefined) return '';
@@ -405,22 +427,6 @@ function init() {
     if (interactiveFromEl) interactiveFromEl.value = interactivePeriod.from;
     if (interactiveToEl) interactiveToEl.value = interactivePeriod.to;
 
-    // Show data persistence notice on first visit
-    if (!localStorage.getItem('dataPersistenceNoticeShown')) {
-        setTimeout(() => {
-            if (confirm('📌 Important: This app uses browser storage. To keep your data across different browsers or devices:\n\n' +
-                '1. Go to Settings tab (Admin only)\n' +
-                '2. Click "Export All Data" to save a backup file\n' +
-                '3. Import the file in any browser/device\n\n' +
-                'You can also enable Auto-Export in Settings for automatic backups.\n\n' +
-                'Show this message again?')) {
-                localStorage.removeItem('dataPersistenceNoticeShown');
-            } else {
-                localStorage.setItem('dataPersistenceNoticeShown', 'true');
-            }
-        }, 1000);
-    }
-
     processRecurringTasks();
     renderDashboard();
     renderTasks();
@@ -428,6 +434,7 @@ function init() {
     renderUsers();
     renderSettings();
     renderInteractiveDashboard();
+    updateLoginScreenCopy();
 }
 
 // Data Management
@@ -595,6 +602,7 @@ function getNextTaskNumberFromData(data) {
 function checkAuth() {
     const user = localStorage.getItem('currentUser');
     document.body.classList.remove('user-admin');
+    document.body.classList.toggle('app-api-mode', isApiMode());
     const masterHint = document.getElementById('masterToolsHint');
     if (user) {
         currentUser = JSON.parse(user);
@@ -615,6 +623,7 @@ function checkAuth() {
         }
     } else {
         currentUser = null;
+        document.body.classList.toggle('app-api-mode', isApiMode());
         document.getElementById('loginModal').classList.add('active');
         document.getElementById('currentUser').textContent = 'Guest';
         if (masterHint) masterHint.style.display = 'none';
@@ -664,6 +673,25 @@ function setLoginPanelMode(mode) {
             tSign.classList.add('active');
             tSign.setAttribute('aria-selected', 'true');
         }
+    }
+    updateLoginScreenCopy();
+}
+
+function updateLoginScreenCopy() {
+    const sub = document.getElementById('loginBrandSubtitle');
+    if (!sub) return;
+    if (isApiMode()) {
+        const modal = document.getElementById('loginModal');
+        const mode = (modal && modal.getAttribute('data-login-mode')) || 'signin';
+        if (mode === 'register') {
+            sub.textContent = 'Creates a new organization admin account. Your workspace is created on the server — nothing is saved as a file in your browser.';
+        } else if (mode === 'master') {
+            sub.textContent = 'Master sign-in for cross-tenant support tools only.';
+        } else {
+            sub.textContent = 'Sign in — your workspace loads from the server.';
+        }
+    } else {
+        sub.textContent = 'Sign in or create an account. Add an API URL in config.js to use cloud storage; otherwise data stays in this browser only.';
     }
 }
 
@@ -3400,10 +3428,21 @@ function openTaskModal(taskId = null) {
     const modal = document.getElementById('taskModal');
     const form = document.getElementById('taskForm');
 
-    // Populate users
+    // Populate users (include current assignee on edit even if outside picker rules, e.g. legacy)
+    let pickUsers = taskAssigneePickerUsers();
+    if (taskId) {
+        const t0 = data.tasks.find(t => t.id == taskId);
+        if (t0) {
+            const aid = Number(t0.assigned_to);
+            if (aid && !pickUsers.some(u => Number(u.id) === aid)) {
+                const u = data.users.find(x => Number(x.id) === aid);
+                if (u) pickUsers = [u, ...pickUsers];
+            }
+        }
+    }
     const userSelect = document.getElementById('taskAssignedTo');
     userSelect.innerHTML = '<option value="">Select user</option>' +
-        usersVisibleInPickers().map(u =>
+        pickUsers.map(u =>
             `<option value="${u.id}">${escapeHtml(u.name)}</option>`
         ).join('');
 
@@ -3589,6 +3628,14 @@ function saveTask(event) {
     // For edit: ensure task exists (handles float IDs from recurring instances; form value is string)
     const isEdit = taskId !== '' && taskId != null;
     const existingTask = isEdit ? data.tasks.find(t => t.id == taskId) : null;
+
+    const assignPick = parseInt(document.getElementById('taskAssignedTo').value, 10);
+    const allowedIds = new Set(taskAssigneePickerUsers().map(u => Number(u.id)));
+    const assignUnchanged = existingTask && Number(existingTask.assigned_to) === assignPick;
+    if (!assignPick || Number.isNaN(assignPick) || (!allowedIds.has(assignPick) && !assignUnchanged)) {
+        alert('Please select a user from your organization for this task.');
+        return;
+    }
     if (isEdit && !existingTask) {
         alert('This task could not be found. It may have been deleted. Please refresh and try again.');
         return;
@@ -3615,7 +3662,7 @@ function saveTask(event) {
         id: existingTask ? existingTask.id : Date.now(),
         task_name: document.getElementById('taskName').value,
         description: document.getElementById('taskDescription').value,
-        assigned_to: parseInt(document.getElementById('taskAssignedTo').value),
+        assigned_to: assignPick,
         location_id: parseInt(document.getElementById('taskLocation').value),
         task_type: taskType,
         due_date: dueDate,
@@ -8346,70 +8393,98 @@ function openLocationModal() {
     document.getElementById('locationCategory').value = currentLocationCategory;
     document.getElementById('attachmentPreview').innerHTML = '';
     locationAttachmentsData = [];
+    const fin = document.getElementById('locationAttachments');
+    if (fin) fin.value = '';
 }
 
 // Close Location Modal
 function closeLocationModal() {
     document.getElementById('locationModal').classList.remove('active');
     locationAttachmentsData = [];
+    const fin = document.getElementById('locationAttachments');
+    if (fin) fin.value = '';
 }
 
-// Handle file attachments
-function handleLocationAttachments() {
-    const fileInput = document.getElementById('locationAttachments');
-    const preview = document.getElementById('attachmentPreview');
-    const files = fileInput.files;
+function readLocationFilesAsAttachmentEntries(files) {
+    const maxSize = MAX_ATTACHMENT_SIZE;
+    return Promise.all(Array.from(files).map((file, index) => new Promise((resolve, reject) => {
+        if (file.size > maxSize) {
+            alert(`File "${file.name}" is too large (max ${MAX_ATTACHMENT_SIZE / 1024 / 1024}MB)`);
+            resolve(null);
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve({
+            id: Date.now() + index + Math.random(),
+            name: file.name,
+            data: reader.result,
+            type: file.type,
+            size: file.size
+        });
+        reader.onerror = () => reject(reader.error || new Error('File read failed'));
+        reader.readAsDataURL(file);
+    }))).then(items => items.filter(Boolean));
+}
 
-    if (files.length === 0) {
+function renderLocationAttachmentPreviewFromData() {
+    const preview = document.getElementById('attachmentPreview');
+    if (!preview) return;
+    const storeHint = isApiMode()
+        ? 'stored on server (cloud)'
+        : (`stored in IndexedDB, max ${MAX_ATTACHMENT_SIZE / 1024 / 1024}MB each`);
+    if (!locationAttachmentsData.length) {
         preview.innerHTML = '';
-        locationAttachmentsData = [];
+        return;
+    }
+    preview.innerHTML = `<div style="font-size: 12px; color: #666; margin-bottom: 8px;">Attachments (${storeHint}):</div>` +
+        locationAttachmentsData.map(att => `
+            <div style="display: flex; align-items: center; gap: 8px; padding: 6px; background: #f8f9fa; border-radius: 4px; margin-bottom: 4px;">
+                <span>📎</span>
+                <span style="flex: 1; font-size: 12px;">${escapeHtml(att.name)}</span>
+                <span style="font-size: 11px; color: #999;">(${formatFileSize(att.size)})</span>
+            </div>
+        `).join('');
+}
+
+/** Merge new files from input with existing saved attachments (remote / IndexedDB). */
+async function handleLocationAttachments() {
+    const fileInput = document.getElementById('locationAttachments');
+    const files = fileInput && fileInput.files;
+    const preserved = locationAttachmentsData.filter(a => a.remoteAttachment || a.storedInIndexedDB);
+
+    if (!files || files.length === 0) {
+        locationAttachmentsData = preserved;
+        renderLocationAttachmentPreviewFromData();
         return;
     }
 
-    const maxSize = MAX_ATTACHMENT_SIZE; // 50MB when using IndexedDB
     if (files.length > MAX_ATTACHMENT_FILES) {
         alert(`Maximum ${MAX_ATTACHMENT_FILES} files per location. You selected ${files.length}.`);
         return;
     }
-    locationAttachmentsData = [];
-    const storeHint = isApiMode()
-        ? 'stored on server'
-        : ('stored in IndexedDB, max ' + (MAX_ATTACHMENT_SIZE / 1024 / 1024) + 'MB each');
-    let previewHTML = '<div style="font-size: 12px; color: #666; margin-bottom: 8px;">Files to attach (' + storeHint + '):</div>';
 
-    Array.from(files).forEach((file, index) => {
-        if (file.size > maxSize) {
-            alert(`File "${file.name}" is too large (max ${MAX_ATTACHMENT_SIZE / 1024 / 1024}MB)`);
-            return;
-        }
+    try {
+        const newEntries = await readLocationFilesAsAttachmentEntries(files);
+        locationAttachmentsData = preserved.concat(newEntries);
+        fileInput.value = '';
+        renderLocationAttachmentPreviewFromData();
+    } catch (e) {
+        console.error(e);
+        alert('Could not read selected files. Please try again.');
+    }
+}
 
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            locationAttachmentsData.push({
-                id: Date.now() + index,
-                name: file.name,
-                data: e.target.result,
-                type: file.type,
-                size: file.size
-            });
-        };
-        reader.readAsDataURL(file);
-
-        previewHTML += `
-            <div style="display: flex; align-items: center; gap: 8px; padding: 6px; background: #f8f9fa; border-radius: 4px; margin-bottom: 4px;">
-                <span>📎</span>
-                <span style="flex: 1; font-size: 12px;">${file.name}</span>
-                <span style="font-size: 11px; color: #999;">(${formatFileSize(file.size)})</span>
-            </div>
-        `;
-    });
-
-    preview.innerHTML = previewHTML;
+async function syncLocationAttachmentsBeforeSave() {
+    const fileInput = document.getElementById('locationAttachments');
+    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+        await handleLocationAttachments();
+    }
 }
 
 // Save Location (IndexedDB locally, or GridFS when API mode)
-function saveLocation(event) {
+async function saveLocation(event) {
     event.preventDefault();
+    await syncLocationAttachmentsBeforeSave();
 
     const data = getData();
     const locId = document.getElementById('locationId').value;
@@ -8516,12 +8591,13 @@ function saveLocation(event) {
     };
 
     if (asyncJobs.length > 0) {
-        Promise.all(asyncJobs)
-            .then(results => doSave(syncAtts.concat(results)))
-            .catch(err => {
-                console.error('Failed to store attachments', err);
-                alert('One or more attachments could not be saved. Please try again.');
-            });
+        try {
+            const results = await Promise.all(asyncJobs);
+            doSave(syncAtts.concat(results));
+        } catch (err) {
+            console.error('Failed to store attachments', err);
+            alert('One or more attachments could not be saved. Please try again.');
+        }
     } else {
         doSave(syncAtts);
     }
@@ -8543,17 +8619,9 @@ function editLocationItem(id) {
 
     // Show existing attachments
     locationAttachmentsData = item.attachments || [];
-    const preview = document.getElementById('attachmentPreview');
-    if (locationAttachmentsData.length > 0) {
-        preview.innerHTML = '<div style="font-size: 12px; color: #666; margin-bottom: 8px;">Current attachments:</div>' +
-            locationAttachmentsData.map(att => `
-                <div style="display: flex; align-items: center; gap: 8px; padding: 6px; background: #f8f9fa; border-radius: 4px; margin-bottom: 4px;">
-                    <span>📎</span>
-                    <span style="flex: 1; font-size: 12px;">${att.name}</span>
-                    <span style="font-size: 11px; color: #999;">(${formatFileSize(att.size)})</span>
-                </div>
-            `).join('');
-    }
+    const fin = document.getElementById('locationAttachments');
+    if (fin) fin.value = '';
+    renderLocationAttachmentPreviewFromData();
 }
 
 // Delete Location Item
@@ -9570,6 +9638,7 @@ function exportLearningNotesToWord() {
 }
 
 async function bootstrapApp() {
+    document.body.classList.toggle('app-api-mode', isApiMode());
     if (!isApiMode()) {
         init();
         return;

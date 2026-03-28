@@ -19,6 +19,18 @@
             padding: 20px;
         }
 
+        .storage-hint-cloud {
+            display: none !important;
+        }
+
+        body.app-api-mode .storage-hint-local {
+            display: none !important;
+        }
+
+        body.app-api-mode .storage-hint-cloud {
+            display: block !important;
+        }
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -1329,7 +1341,7 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Tracking System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.1</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.2</span></span>
             </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
@@ -2044,6 +2056,10 @@
                         <h3>User Management</h3>
                         <button type="button" class="btn btn-primary" id="settingsAddUserBtn" onclick="openUserModal()">+ Add User</button>
                     </div>
+                    <p style="color:#666;font-size:13px;margin-bottom:12px;line-height:1.55;">
+                        <span class="storage-hint-cloud"><strong>How accounts work:</strong> “Create account” on the login screen registers a new <strong>organization admin</strong> (their own workspace on the server). That admin adds <strong>users</strong> here for their team. <strong>Admins assign tasks only to users in this list</strong> (your organization). Regular users only assign tasks to themselves.</span>
+                        <span class="storage-hint-local"><strong>Local mode:</strong> Without an API URL in <code>config.js</code>, data stays in this browser. Use “Create account” for a local admin, then add users here.</span>
+                    </p>
                     <table class="table">
                         <thead>
                             <tr>
@@ -2135,7 +2151,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.1</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.2</span></p>
         </footer>
     </div>
 
@@ -2163,7 +2179,7 @@
                 <div class="login-screen-inner">
                     <div class="login-brand">
                         <h2>Task Tracking System</h2>
-                        <p>Sign in or create an account to continue</p>
+                        <p id="loginBrandSubtitle">Sign in or create an account to continue</p>
                     </div>
                     <div class="login-segment" role="tablist">
                         <button type="button" id="loginTabSignin" class="active" aria-selected="true">Sign in</button>
@@ -2186,7 +2202,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.1</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.2</span></p>
                     </div>
                 </div>
             </div>
@@ -2773,7 +2789,7 @@
                 <h2 id="locationModalTitle">Add Location</h2>
                 <button class="close-btn" onclick="closeLocationModal()">&times;</button>
             </div>
-            <form id="locationForm" onsubmit="saveLocation(event)">
+            <form id="locationForm" onsubmit="void saveLocation(event)">
                 <div class="form-group">
                     <label>Category *</label>
                     <select class="form-control" id="locationCategory" required>
@@ -2801,8 +2817,11 @@
                     <label>Attachments (Optional)</label>
                     <input type="file" class="form-control" id="locationAttachments" multiple
                         onchange="handleLocationAttachments()" accept="*/*">
-                    <small style="color: #666; font-size: 12px; margin-top: 5px; display: block;">
-                        Files are stored in IndexedDB (no 5MB limit). You can attach multiple files (up to 50MB each, max 50 files per location).
+                    <small class="storage-hint-local" style="color: #666; font-size: 12px; margin-top: 5px; display: block;">
+                        Files are stored in IndexedDB (this browser). You can attach multiple files (up to 50MB each, max 50 files per location).
+                    </small>
+                    <small class="storage-hint-cloud" style="color: #666; font-size: 12px; margin-top: 5px; display: block;">
+                        With cloud sign-in, attachments upload to the server (GridFS). Multiple files up to 50MB each, max 50 per location.
                     </small>
                     <div id="attachmentPreview" style="margin-top: 10px;"></div>
                 </div>
@@ -2858,7 +2877,13 @@
     </div>
 
     <script src="config.js"></script>
-    <script src="app.js?v=12.0.1"></script>
+    <script>
+        /* If config.js is missing on the host, avoid silent local-only mode. */
+        if (typeof window.API_BASE_URL !== 'string') {
+            window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
+        }
+    </script>
+    <script src="app.js?v=12.0.2"></script>
 </body>
 
 </html>

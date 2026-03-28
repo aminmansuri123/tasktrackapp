@@ -12,16 +12,23 @@ function stripPasswordFromUsers(users) {
 
 /** Users belonging to one org (excludes master). */
 async function usersToClientShapeForTenant(tenantRootUserId) {
-  if (tenantRootUserId == null || Number.isNaN(tenantRootUserId)) {
+  const root = typeof tenantRootUserId === 'number' ? tenantRootUserId : parseInt(String(tenantRootUserId), 10);
+  if (root == null || Number.isNaN(root)) {
     return [];
   }
+  // Include rows tied to this tenant AND the org owner row (userId === root) even if
+  // tenantRootUserId was null/legacy on that document — avoids empty User Management.
   const list = await User.find({
-    tenantRootUserId,
     isMaster: { $ne: true },
+    $or: [{ tenantRootUserId: root }, { userId: root }],
   })
     .sort({ userId: 1 })
     .lean();
-  return list.map((u) => ({
+  const byId = new Map();
+  for (const u of list) {
+    if (!byId.has(u.userId)) byId.set(u.userId, u);
+  }
+  return [...byId.values()].map((u) => ({
     id: u.userId,
     email: u.email,
     name: u.name,
