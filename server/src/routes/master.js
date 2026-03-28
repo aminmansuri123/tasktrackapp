@@ -29,6 +29,29 @@ router.post('/users/:userId/password', authMiddleware, requireMaster, async (req
   }
 });
 
+router.post('/users/:userId/active', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    const { active } = req.body || {};
+    if (Number.isNaN(userId) || typeof active !== 'boolean') {
+      return res.status(400).json({ error: 'Invalid user or active flag' });
+    }
+    const target = await User.findOne({ userId });
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (target.isMaster) {
+      return res.status(403).json({ error: 'Cannot change master account status' });
+    }
+    target.isActive = active;
+    await target.save();
+    return res.json({ ok: true, is_active: target.isActive });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Update failed' });
+  }
+});
+
 router.post('/resync-workspace-users', authMiddleware, requireMaster, async (_req, res) => {
   try {
     const workspaces = await Workspace.find({ tenantRootUserId: { $ne: null } });

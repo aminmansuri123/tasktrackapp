@@ -1,4 +1,4 @@
-const APP_VERSION = '11.0.2';
+const APP_VERSION = '12.0';
 
 // Data Storage
 let currentUser = null;
@@ -378,6 +378,10 @@ function init() {
 
     const footerVer = document.getElementById('appFooterVersion');
     if (footerVer) footerVer.textContent = APP_VERSION;
+    const headerVer = document.getElementById('headerAppVersion');
+    if (headerVer) headerVer.textContent = `v${APP_VERSION}`;
+    const loginVer = document.getElementById('loginFooterVersion');
+    if (loginVer) loginVer.textContent = APP_VERSION;
 
     // Initialize period filters from localStorage
     const period = getDashboardPeriod();
@@ -691,7 +695,12 @@ async function login() {
             const body = await res.json();
             currentUser = body.user;
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
-            await apiPullWorkspace();
+            try {
+                await apiPullWorkspace();
+            } catch (pullErr) {
+                console.error('Workspace load after login:', pullErr);
+                __workspaceCache = normalizeData(defaultWorkspaceShell());
+            }
             const lp = document.getElementById('loginPassword');
             if (lp) lp.value = '';
             checkAuth();
@@ -753,7 +762,12 @@ async function register() {
             const body = await res.json();
             currentUser = body.user;
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
-            await apiPullWorkspace();
+            try {
+                await apiPullWorkspace();
+            } catch (pullErr) {
+                console.error('Workspace load after register:', pullErr);
+                __workspaceCache = normalizeData(defaultWorkspaceShell());
+            }
             const lp = document.getElementById('loginPassword');
             if (lp) lp.value = '';
             checkAuth();
@@ -2910,6 +2924,13 @@ function saveTaskCompletion(event) {
             }
 
             if (task) {
+                task.rejected_at = null;
+                task.rejected_by = null;
+                task.previous_submission_comment = null;
+                task.admin_comment = null;
+                task.admin_finalized = false;
+                task.finalized_at = null;
+                task.finalized_by = null;
                 // Set task action based on completion type (completed or completed_need_improvement)
                 task.task_action = completionType;
                 task.comment = comment;
@@ -3025,17 +3046,18 @@ function updateTaskStatus(taskId, status) {
 
 // Accept task completion (Admin finalizes the task)
 function acceptTaskCompletion(taskId) {
-    const adminComment = prompt('Enter admin comment (required):');
-    if (adminComment === null || adminComment.trim() === '') {
-        alert('Admin comment is required to accept the task.');
-        return;
-    }
+    const data = getData();
+    const task = data.tasks.find(t => t.id == taskId);
+    const defaultComment = (task && task.comment && String(task.comment).trim()) || 'DONE';
+    const raw = prompt('Admin comment (OK for default):', defaultComment);
+    if (raw === null) return;
+    const adminComment = (raw.trim() || defaultComment).trim();
 
     updateData(data => {
         const task = data.tasks.find(t => t.id == taskId);
         if (task) {
             task.admin_finalized = true;
-            task.admin_comment = adminComment.trim();
+            task.admin_comment = adminComment;
             task.finalized_at = new Date().toISOString();
             task.finalized_by = currentUser.id;
             // Task remains completed, just finalized by admin
@@ -3234,7 +3256,7 @@ function stopRecurringTask(taskId) {
 
 // Reject task completion (Admin rejects and sets task back to pending)
 function rejectTaskCompletion(taskId) {
-    const adminComment = prompt('Enter rejection reason (required):');
+    const adminComment = prompt('Enter rejection reason for the assignee (required):');
     if (adminComment === null || adminComment.trim() === '') {
         alert('Rejection reason is required to reject the task.');
         return;
@@ -3243,16 +3265,18 @@ function rejectTaskCompletion(taskId) {
     updateData(data => {
         const task = data.tasks.find(t => t.id == taskId);
         if (task) {
-            // Set task back to pending status
+            if (task.comment && String(task.comment).trim()) {
+                task.previous_submission_comment = String(task.comment).trim();
+            }
             task.task_action = 'not_completed';
             task.admin_finalized = false;
             task.admin_comment = adminComment.trim();
             task.rejected_at = new Date().toISOString();
             task.rejected_by = currentUser.id;
-            // Clear completion data
             task.completed_at = null;
             task.completed_by = null;
-            // Keep the original user comment for reference
+            task.completion_date = null;
+            task.comment = null;
         }
     });
 
@@ -3846,11 +3870,19 @@ function openInteractiveTaskPopup(taskId) {
                 ` : ''}
             </div>
             
+            ${!isTaskCompleted(task) && task.rejected_at && task.admin_comment ? `
+            <div style="margin-bottom: 15px; padding: 14px; background: linear-gradient(135deg, #fff8e1, #ffecb3); border-radius: 8px; border-left: 4px solid #ff9800;">
+                <strong style="color: #e65100;">Returned — please review and resubmit</strong>
+                <div style="margin-top: 10px; color: #5d4037; white-space: pre-wrap;">${escapeHtml(task.admin_comment)}</div>
+                ${task.previous_submission_comment ? `<div style="margin-top: 10px; font-size: 12px; color: #795548;">Your previous completion note: ${escapeHtml(task.previous_submission_comment)}</div>` : ''}
+            </div>
+            ` : ''}
+            
             ${task.comment ? `
             <div style="margin-bottom: 15px;">
                 <strong style="color: #333;">Completion Remark:</strong>
                 <div style="margin-top: 5px; padding: 10px; background: #e3f2fd; border-radius: 5px; color: #666;">
-                    ${task.comment}
+                    ${escapeHtml(task.comment)}
                 </div>
                 ${task.completed_at ? `
                     <div style="margin-top: 5px; font-size: 12px; color: #999;">
@@ -3860,11 +3892,11 @@ function openInteractiveTaskPopup(taskId) {
             </div>
             ` : ''}
             
-            ${task.admin_comment ? `
+            ${task.admin_comment && (isTaskCompleted(task) || task.admin_finalized || !task.rejected_at) ? `
             <div style="margin-bottom: 15px;">
                 <strong style="color: #333;">Admin Comment:</strong>
                 <div style="margin-top: 5px; padding: 10px; background: ${task.admin_finalized ? '#d4edda' : '#f8d7da'}; border-radius: 5px; color: #666;">
-                    ${task.admin_comment}
+                    ${escapeHtml(task.admin_comment)}
                 </div>
                 ${task.finalized_at ? `
                     <div style="margin-top: 5px; font-size: 12px; color: #999;">
@@ -5077,6 +5109,24 @@ function renderSettings() {
             const opts = data.users.map(u =>
                 `<option value="${u.id}">${escapeHtml(u.name)} (${escapeHtml(u.email)})</option>`
             ).join('');
+            const accountRows = (data.users || [])
+                .filter(u => !isMasterUserRecord(u))
+                .map(u => {
+                    const active = u.is_active !== false;
+                    const safeName = escapeHtml(u.name || '');
+                    const safeEmail = escapeHtml(u.email || '');
+                    return `
+                    <tr>
+                        <td style="padding:8px 10px;">${safeName}</td>
+                        <td style="padding:8px 10px;color:#666;font-size:13px;">${safeEmail}</td>
+                        <td style="padding:8px 10px;"><span class="badge ${active ? 'badge-completed' : 'badge-pending'}">${active ? 'Active' : 'Disabled'}</span></td>
+                        <td style="padding:8px 10px;">
+                            ${active
+                    ? `<button type="button" class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="masterSetUserActive(${u.id}, false)">Deactivate</button>`
+                    : `<button type="button" class="btn btn-success" style="padding:4px 10px;font-size:12px;" onclick="masterSetUserActive(${u.id}, true)">Activate</button>`}
+                        </td>
+                    </tr>`;
+                }).join('');
             masterSec.innerHTML = `
                 <h3>Master password reset</h3>
                 <p style="color:#666;font-size:13px;">All accounts are listed in <strong>User Management</strong> above. Set a new login password for any user (including other admins) below. Uses the hosted API only.</p>
@@ -5090,6 +5140,14 @@ function renderSettings() {
                         <input type="password" id="masterResetNewPassword" class="form-control" placeholder="Min 6 characters" autocomplete="new-password">
                     </div>
                     <button type="button" class="btn btn-primary" onclick="masterResetUserPassword()">Update password</button>
+                </div>
+                <h3 style="margin-top:24px;">Activate / deactivate accounts</h3>
+                <p style="color:#666;font-size:13px;">Deactivate prevents sign-in for that user (master account cannot be changed). Reactivate to restore access.</p>
+                <div style="overflow-x:auto;margin-top:10px;">
+                    <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                        <thead><tr style="text-align:left;border-bottom:1px solid #ddd;"><th style="padding:8px 10px;">Name</th><th style="padding:8px 10px;">Email</th><th style="padding:8px 10px;">Status</th><th style="padding:8px 10px;">Action</th></tr></thead>
+                        <tbody>${accountRows || '<tr><td colspan="4" style="padding:12px;color:#999;">No users</td></tr>'}</tbody>
+                    </table>
                 </div>
             `;
         } else {
@@ -5161,6 +5219,35 @@ function renderSettings() {
                 note.style.display = note.textContent ? 'block' : 'none';
             }
         }
+    }
+}
+
+async function masterSetUserActive(userId, active) {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const verb = active ? 'activate' : 'deactivate';
+    if (!confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} this account?`)) return;
+    try {
+        const res = await apiFetch(`/api/master/users/${userId}/active`, {
+            method: 'POST',
+            body: JSON.stringify({ active })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Update failed');
+            return;
+        }
+        try {
+            await apiPullWorkspace();
+        } catch (pullErr) {
+            console.error('Workspace refresh after account status:', pullErr);
+        }
+        renderSettings();
+        renderUsers();
+        renderTasks();
+        alert(active ? 'Account activated.' : 'Account deactivated.');
+    } catch (e) {
+        console.error(e);
+        alert('Request failed. Check your connection and API URL.');
     }
 }
 
@@ -9469,7 +9556,12 @@ async function bootstrapApp() {
         if (res.ok) {
             currentUser = await res.json();
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
-            await apiPullWorkspace();
+            try {
+                await apiPullWorkspace();
+            } catch (pullErr) {
+                console.error('Workspace load on bootstrap:', pullErr);
+                __workspaceCache = normalizeData(defaultWorkspaceShell());
+            }
         } else {
             currentUser = null;
             localStorage.removeItem('currentUser');
