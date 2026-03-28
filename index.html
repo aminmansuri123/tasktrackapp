@@ -598,6 +598,142 @@
             display: inline-block;
         }
 
+        /* Full-screen sign-in (blue theme) */
+        #loginModal.login-screen {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 5000;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: linear-gradient(145deg, #0a1628 0%, #1a3a5c 42%, #0d47a1 78%, #1565c0 100%);
+            overflow-y: auto;
+        }
+
+        #loginModal.login-screen.active {
+            display: flex;
+        }
+
+        #loginModal.login-screen .login-screen-inner {
+            width: 100%;
+            max-width: 440px;
+            background: rgba(255, 255, 255, 0.97);
+            border-radius: 20px;
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.2);
+            padding: 36px 32px 32px;
+            position: relative;
+        }
+
+        #loginModal.login-screen .login-brand {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        #loginModal.login-screen .login-brand h2 {
+            margin: 0 0 8px;
+            font-size: 1.65rem;
+            font-weight: 700;
+            color: #0d47a1;
+            letter-spacing: -0.02em;
+        }
+
+        #loginModal.login-screen .login-brand p {
+            margin: 0;
+            font-size: 14px;
+            color: #546e7a;
+        }
+
+        #loginModal.login-screen .login-segment {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 22px;
+            padding: 4px;
+            background: #e3f2fd;
+            border-radius: 12px;
+        }
+
+        #loginModal.login-screen .login-segment button {
+            flex: 1;
+            border: none;
+            background: transparent;
+            padding: 10px 8px;
+            border-radius: 9px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #546e7a;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        #loginModal.login-screen .login-segment button.active {
+            background: #fff;
+            color: #0d47a1;
+            box-shadow: 0 2px 8px rgba(13, 71, 161, 0.12);
+        }
+
+        #loginModal.login-screen .form-group label {
+            color: #37474f;
+            font-size: 13px;
+        }
+
+        #loginModal.login-screen .form-control {
+            border-color: #b0bec5;
+        }
+
+        #loginModal.login-screen .form-control:focus {
+            border-color: #1976d2;
+            box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.15);
+        }
+
+        #loginModal.login-screen .login-primary {
+            width: 100%;
+            margin-top: 8px;
+            padding: 14px;
+            font-size: 15px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #1565c0, #0d47a1);
+            border: none;
+            border-radius: 12px;
+            color: #fff;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+
+        #loginModal.login-screen .login-primary:hover {
+            box-shadow: 0 8px 24px rgba(13, 71, 161, 0.35);
+            transform: translateY(-1px);
+        }
+
+        #loginModal.login-screen .login-hint {
+            font-size: 12px;
+            color: #607d8b;
+            margin-top: 14px;
+            text-align: center;
+            line-height: 1.5;
+        }
+
+        .master-tools-hint {
+            font-size: 12px;
+            color: #5c6bc0;
+            max-width: 220px;
+            text-align: right;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font: inherit;
+            padding: 0;
+            text-decoration: underline;
+        }
+
+        .master-tools-hint:hover {
+            color: #3949ab;
+        }
+
+        .login-master-link {
+            font-size: 13px;
+        }
+
         select.form-control {
             cursor: pointer;
         }
@@ -939,6 +1075,32 @@
             margin-top: 12px;
         }
         .snippet-card-actions .btn { padding: 6px 12px; font-size: 13px; }
+
+        .milestone-view-text {
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: #333;
+            font-size: 14px;
+            line-height: 1.55;
+            padding: 12px 14px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e8e8e8;
+            min-height: 1.5em;
+        }
+
+        .milestone-view-comment {
+            color: #555;
+            font-style: italic;
+        }
+
+        .milestone-card-click {
+            cursor: pointer;
+        }
+
+        .milestone-card-click:hover {
+            box-shadow: 0 4px 14px rgba(102, 126, 234, 0.15);
+        }
     </style>
 </head>
 
@@ -947,10 +1109,12 @@
         <div class="header">
             <div>
                 <h1>📋 Task Management System</h1>
-                <p style="font-size: 12px; margin-top: 5px; opacity: 0.9;">Developed by - Amin Mansuri | v10.0</p>
+                <p style="font-size: 12px; margin-top: 5px; opacity: 0.9;">Developed by - Amin Mansuri | v11.0</p>
             </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
+                <button type="button" class="btn btn-secondary login-master-link" id="masterSignInBtn" onclick="goToMasterLogin()" style="display: none;">Master sign-in</button>
+                <button type="button" id="masterToolsHint" class="master-tools-hint" style="display: none;" title="Open Settings" onclick="switchTab('settings', document.querySelector('.nav-tab[onclick*=\"settings\"]'))">Master tools → Settings (⚙)</button>
                 <button class="btn btn-secondary" onclick="logout()">Logout</button>
             </div>
         </div>
@@ -959,7 +1123,7 @@
             <button class="nav-tab active" onclick="switchTab('dashboard', this)">Overview</button>
             <button class="nav-tab" onclick="switchTab('interactive', this)">Task View</button>
             <button class="nav-tab" onclick="switchTab('drilldown', this)">Drilldown</button>
-            <button class="nav-tab" onclick="switchTab('tasks', this)">Task Mgmt</button>
+            <button class="nav-tab" onclick="switchTab('tasks', this)">Task Setup</button>
             <button class="nav-tab" onclick="switchTab('milestones', this)">🏆 Milestones</button>
             <button class="nav-tab" onclick="switchTab('planner', this)">Planner</button>
             <button class="nav-tab" onclick="switchTab('notes', this)">📝 Notes</button>
@@ -967,8 +1131,8 @@
             <button class="nav-tab" onclick="switchTab('journal', this)">Diary</button>
             <button class="nav-tab" onclick="switchTab('locations', this)">📂 Locations</button>
             <button class="nav-tab" onclick="switchTab('snippets', this)">💻 Code Snippets</button>
-            <button class="nav-tab" onclick="switchTab('recurringReport', this)">Recurring Task Dashboard</button>
-            <button class="nav-tab admin-only" onclick="switchTab('settings', this)" title="Settings">⚙</button>
+            <button class="nav-tab" onclick="switchTab('recurringReport', this)">Dashboard</button>
+            <button class="nav-tab admin-only" onclick="switchTab('settings', this)" title="Settings">⚙ Settings</button>
             <button class="nav-tab" onclick="switchTab('calendar', this)" title="Calendar">📆</button>
         </div>
 
@@ -1292,7 +1456,7 @@
             <!-- Tasks Tab -->
             <div id="tasks" class="tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h2>Task Mgmt</h2>
+                    <h2>Task Setup</h2>
                     <div>
                         <button class="btn btn-secondary" onclick="exportData('csv')">Export CSV (Filtered)</button>
                         <button class="btn btn-secondary" onclick="exportData('json')">Export JSON (All Data)</button>
@@ -1630,7 +1794,7 @@
             <!-- Recurring Tasks Dashboard Tab -->
             <div id="recurringReport" class="tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
-                    <h2>Recurring Task Dashboard</h2>
+                    <h2>Dashboard</h2>
                     <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                         <label style="font-weight: 500; color: #333;">From Month:</label>
                         <input type="month" class="form-control" id="recurringReportFromMonth" onchange="renderRecurringReport()" style="width: 150px;">
@@ -1651,7 +1815,7 @@
             </div>
 
             <!-- Settings Tab (Admin Only) -->
-            <div id="settings" class="tab-content admin-only">
+            <div id="settings" class="tab-content">
                 <h2>Settings</h2>
 
                 <!-- User Management Section -->
@@ -1750,28 +1914,32 @@
         </div>
     </div>
 
-    <!-- Login Modal -->
-    <div id="loginModal" class="modal active">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Login / Register</h2>
+    <!-- Login (full-screen gate) -->
+    <div id="loginModal" class="modal login-screen active" data-login-mode="signin" aria-modal="true" role="dialog">
+        <div class="login-screen-inner">
+            <div class="login-brand">
+                <h2>Task Management</h2>
+                <p>Sign in or create an account to continue</p>
+            </div>
+            <div class="login-segment" role="tablist">
+                <button type="button" id="loginTabSignin" class="active" onclick="setLoginPanelMode('signin')" aria-selected="true">Sign in</button>
+                <button type="button" id="loginTabRegister" onclick="setLoginPanelMode('register')" aria-selected="false">Create account</button>
+                <button type="button" id="loginTabMaster" onclick="setLoginPanelMode('master')" aria-selected="false">Master</button>
+            </div>
+            <div id="loginNameGroup" class="form-group hidden">
+                <label for="loginName">Name</label>
+                <input type="text" class="form-control" id="loginName" name="name" placeholder="Your full name" autocomplete="name">
             </div>
             <div class="form-group">
-                <label>Name</label>
-                <input type="text" class="form-control" id="loginName" placeholder="Your name">
+                <label for="loginEmail">Email</label>
+                <input type="email" class="form-control" id="loginEmail" name="email" placeholder="you@company.com" autocomplete="username" required>
             </div>
             <div class="form-group">
-                <label>Email</label>
-                <input type="email" class="form-control" id="loginEmail" placeholder="your@email.com">
+                <label for="loginPassword">Password</label>
+                <input type="password" class="form-control" id="loginPassword" name="password" placeholder="Min. 6 characters" autocomplete="off" required>
             </div>
-            <div class="form-group">
-                <label>Password</label>
-                <input type="password" class="form-control" id="loginPassword" placeholder="Password (min 6 chars)">
-            </div>
-            <div style="display: flex; gap: 10px;">
-                <button class="btn btn-primary" onclick="login()" style="flex: 1;">Login</button>
-                <button class="btn btn-secondary" onclick="register()" style="flex: 1;">Register</button>
-            </div>
+            <button type="button" class="login-primary" id="loginSubmitBtn" onclick="submitLoginPanel()">Sign in</button>
+            <p id="loginModeHint" class="login-hint">Use your workspace email and password. Nothing is saved in the browser except your session profile after login.</p>
             <div id="loginError" style="margin-top: 15px;"></div>
         </div>
     </div>
@@ -2279,6 +2447,31 @@
                     <button type="submit" class="btn btn-primary" style="flex: 1;">Save Milestone</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Milestone view (read-only) -->
+    <div id="milestoneViewModal" class="modal">
+        <div class="modal-content" style="max-width: 560px;">
+            <div class="modal-header">
+                <h2 id="milestoneViewTitle">Milestone</h2>
+                <button type="button" class="close-btn" onclick="closeMilestoneViewModal()">&times;</button>
+            </div>
+            <div style="padding: 0 0 8px;">
+                <p style="margin: 0 0 12px; color: #667eea; font-weight: 600;" id="milestoneViewDate"></p>
+                <div class="form-group" style="margin-bottom: 12px;">
+                    <label style="font-size: 12px; color: #666;">Description</label>
+                    <div id="milestoneViewDescription" class="milestone-view-text"></div>
+                </div>
+                <div id="milestoneViewCommentWrap" class="form-group" style="margin-bottom: 0; display: none;">
+                    <label style="font-size: 12px; color: #666;">Comment</label>
+                    <div id="milestoneViewComment" class="milestone-view-text milestone-view-comment"></div>
+                </div>
+                <div style="margin-top: 20px; text-align: right;">
+                    <button type="button" class="btn btn-secondary" onclick="closeMilestoneViewModal()">Close</button>
+                    <button type="button" class="btn btn-primary" id="milestoneViewEditBtn">Edit</button>
+                </div>
+            </div>
         </div>
     </div>
 

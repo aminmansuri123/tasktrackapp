@@ -38,17 +38,33 @@ function scheduleWorkspacePush() {
     __workspacePushTimer = setTimeout(() => flushWorkspaceToApi(), WORKSPACE_PUSH_DEBOUNCE_MS);
 }
 
-async function flushWorkspaceToApi() {
-    if (!isApiMode() || !currentUser || !__workspaceCache) return;
+async function putWorkspaceCacheToServer() {
+    if (!isApiMode() || !__workspaceCache) return false;
     try {
         const res = await apiFetch('/api/workspace', { method: 'PUT', body: JSON.stringify(__workspaceCache) });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             console.error('Workspace sync failed', err);
+            return false;
         }
+        return true;
     } catch (e) {
         console.error('Workspace sync error', e);
+        return false;
     }
+}
+
+async function flushWorkspaceToApi() {
+    if (!isApiMode() || !currentUser || !__workspaceCache) return;
+    await putWorkspaceCacheToServer();
+}
+
+/** Immediate PUT (used after import) while session cookie is still valid. Cancels debounced push. */
+async function flushWorkspaceToApiNow() {
+    if (!isApiMode() || !currentUser || !__workspaceCache) return false;
+    clearTimeout(__workspacePushTimer);
+    __workspacePushTimer = null;
+    return putWorkspaceCacheToServer();
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -280,6 +296,26 @@ function escapeHtml(text) {
         "'": '&#039;'
     };
     return String(text).replace(/[&<>"']/g, m => map[m]);
+}
+
+const MASTER_ACCOUNT_EMAIL = (typeof window.MASTER_ACCOUNT_EMAIL === 'string' && window.MASTER_ACCOUNT_EMAIL.trim())
+    ? window.MASTER_ACCOUNT_EMAIL.trim().toLowerCase()
+    : 'mansuri.amin1@gmail.com';
+
+function isMasterUserRecord(u) {
+    if (!u) return false;
+    if (u.isMaster === true) return true;
+    const em = (u.email || '').toLowerCase();
+    return em === MASTER_ACCOUNT_EMAIL;
+}
+
+/** Users shown in assignee / filter dropdowns (hides master for non-admin users). */
+function usersVisibleInPickers() {
+    const data = getData();
+    const list = (data.users || []).filter(u => u.is_active !== false);
+    if (!currentUser) return list;
+    if (currentUser.role === 'admin' || currentUser.isMaster) return list;
+    return list.filter(u => !isMasterUserRecord(u));
 }
 
 // Utility function to escape CSV values
@@ -539,6 +575,8 @@ function getNextTaskNumberFromData(data) {
 function checkAuth() {
     const user = localStorage.getItem('currentUser');
     document.body.classList.remove('user-admin');
+    const masterBtn = document.getElementById('masterSignInBtn');
+    const masterHint = document.getElementById('masterToolsHint');
     if (user) {
         currentUser = JSON.parse(user);
         document.getElementById('loginModal').classList.remove('active');
@@ -546,15 +584,101 @@ function checkAuth() {
         if (currentUser.role === 'admin') {
             document.body.classList.add('user-admin');
         }
+        if (masterBtn) masterBtn.style.display = currentUser.isMaster ? 'none' : 'inline-block';
+        if (masterHint) masterHint.style.display = currentUser.isMaster ? 'inline-block' : 'none';
     } else {
         currentUser = null;
         document.getElementById('loginModal').classList.add('active');
+        document.getElementById('currentUser').textContent = 'Guest';
+        if (masterBtn) masterBtn.style.display = 'none';
+        if (masterHint) masterHint.style.display = 'none';
+        const pw = document.getElementById('loginPassword');
+        const em = document.getElementById('loginEmail');
+        const nm = document.getElementById('loginName');
+        if (pw) pw.value = '';
+        if (em) em.value = '';
+        if (nm) nm.value = '';
+        setLoginPanelMode('signin');
     }
 }
 
+function setLoginPanelMode(mode) {
+    const modal = document.getElementById('loginModal');
+    if (!modal) return;
+    modal.setAttribute('data-login-mode', mode);
+    const nameGroup = document.getElementById('loginNameGroup');
+    const submitBtn = document.getElementById('loginSubmitBtn');
+    const hint = document.getElementById('loginModeHint');
+    const tSign = document.getElementById('loginTabSignin');
+    const tReg = document.getElementById('loginTabRegister');
+    const tMas = document.getElementById('loginTabMaster');
+    [tSign, tReg, tMas].forEach(t => {
+        if (t) {
+            t.classList.remove('active');
+            t.setAttribute('aria-selected', 'false');
+        }
+    });
+    if (mode === 'register') {
+        if (nameGroup) nameGroup.classList.remove('hidden');
+        if (submitBtn) submitBtn.textContent = 'Create account';
+        if (hint) hint.textContent = 'New accounts register as a standard user. An admin can change roles in Settings.';
+        if (tReg) {
+            tReg.classList.add('active');
+            tReg.setAttribute('aria-selected', 'true');
+        }
+    } else if (mode === 'master') {
+        if (nameGroup) nameGroup.classList.add('hidden');
+        if (submitBtn) submitBtn.textContent = 'Master sign in';
+        if (hint) hint.textContent = 'Sign in with the master workspace account (same server as team login).';
+        if (tMas) {
+            tMas.classList.add('active');
+            tMas.setAttribute('aria-selected', 'true');
+        }
+    } else {
+        if (nameGroup) nameGroup.classList.add('hidden');
+        if (submitBtn) submitBtn.textContent = 'Sign in';
+        if (hint) hint.textContent = 'Use your workspace email and password. Credentials are not stored in the browser; only your profile is kept after login.';
+        if (tSign) {
+            tSign.classList.add('active');
+            tSign.setAttribute('aria-selected', 'true');
+        }
+    }
+}
+
+function submitLoginPanel() {
+    const mode = document.getElementById('loginModal')?.getAttribute('data-login-mode') || 'signin';
+    if (mode === 'register') {
+        register();
+    } else {
+        login();
+    }
+}
+
+async function goToMasterLogin() {
+    if (!confirm('You will be signed out so you can sign in with a master account. Continue?')) return;
+    if (isApiMode()) {
+        try {
+            await apiFetch('/api/auth/logout', { method: 'POST' });
+        } catch (_) {
+            /* ignore */
+        }
+        __workspaceCache = null;
+    }
+    localStorage.removeItem('currentUser');
+    currentUser = null;
+    document.body.classList.remove('user-admin');
+    checkAuth();
+    setLoginPanelMode('master');
+}
+
 async function login() {
-    const email = document.getElementById('loginEmail').value;
+    const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
+
+    if (!email || !password) {
+        showError('loginError', 'Please enter email and password.');
+        return;
+    }
 
     if (isApiMode()) {
         try {
@@ -571,6 +695,8 @@ async function login() {
             currentUser = body.user;
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
             await apiPullWorkspace();
+            const lp = document.getElementById('loginPassword');
+            if (lp) lp.value = '';
             checkAuth();
             init();
         } catch (e) {
@@ -595,13 +721,19 @@ async function login() {
     currentUser = { ...user };
     delete currentUser.password;
     localStorage.setItem('currentUser', JSON.stringify(currentUser));
+    const lp = document.getElementById('loginPassword');
+    if (lp) lp.value = '';
     checkAuth();
     init();
 }
 
 async function register() {
-    const name = document.getElementById('loginName').value;
-    const email = document.getElementById('loginEmail').value;
+    if (document.getElementById('loginModal')?.getAttribute('data-login-mode') !== 'register') {
+        showError('loginError', 'Use the "Create account" tab to register.');
+        return;
+    }
+    const name = document.getElementById('loginName').value.trim();
+    const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
 
     if (!name || !email || !password || password.length < 6) {
@@ -624,6 +756,8 @@ async function register() {
             currentUser = body.user;
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
             await apiPullWorkspace();
+            const lp = document.getElementById('loginPassword');
+            if (lp) lp.value = '';
             checkAuth();
             init();
         } catch (e) {
@@ -655,6 +789,8 @@ async function register() {
     currentUser = { ...newUser };
     delete currentUser.password;
     localStorage.setItem('currentUser', JSON.stringify(currentUser));
+    const lp = document.getElementById('loginPassword');
+    if (lp) lp.value = '';
     checkAuth();
     init();
 }
@@ -684,6 +820,9 @@ function showError(elementId, message) {
 
 // Tab Navigation
 function switchTab(tabName, eventElement, skipAutoRender = false) {
+    if (tabName === 'settings' && (!currentUser || currentUser.role !== 'admin')) {
+        return;
+    }
     document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
 
@@ -3219,8 +3358,8 @@ function openTaskModal(taskId = null) {
     // Populate users
     const userSelect = document.getElementById('taskAssignedTo');
     userSelect.innerHTML = '<option value="">Select user</option>' +
-        data.users.filter(u => u.is_active).map(u =>
-            `<option value="${u.id}">${u.name}</option>`
+        usersVisibleInPickers().map(u =>
+            `<option value="${u.id}">${escapeHtml(u.name)}</option>`
         ).join('');
 
     // Populate locations
@@ -4933,7 +5072,7 @@ function renderSettings() {
             ).join('');
             masterSec.innerHTML = `
                 <h3>Master password reset</h3>
-                <p style="color:#666;font-size:13px;">Set a new login password for any user (including other admins). Uses the hosted API only.</p>
+                <p style="color:#666;font-size:13px;">All accounts are listed in <strong>User Management</strong> above. Set a new login password for any user (including other admins) below. Uses the hosted API only.</p>
                 <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:10px;">
                     <div class="form-group" style="margin:0;min-width:220px;">
                         <label>User</label>
@@ -5132,8 +5271,8 @@ function renderInteractiveDashboard() {
 
     // Populate user dropdown
     userSelect.innerHTML = '<option value="">All Users</option>' +
-        data.users.filter(u => u.is_active).map(u =>
-            `<option value="${u.id}">${u.name}</option>`
+        usersVisibleInPickers().map(u =>
+            `<option value="${u.id}">${escapeHtml(u.name)}</option>`
         ).join('');
 
     // Set default user to logged-in user only on first load, otherwise preserve user selection
@@ -5810,7 +5949,7 @@ function exportAllData() {
 
     const exportAndDownload = (attachmentBlobs) => {
         const exportData = {
-            version: '10.0',
+            version: '11.0',
             exportDate: new Date().toISOString(),
         applicationName: 'Task Management System',
             data: completeData,
@@ -5861,7 +6000,7 @@ function importAllData(event) {
     }
 
     const reader = new FileReader();
-    reader.onload = function (e) {
+    reader.onload = async function (e) {
         try {
             const imported = JSON.parse(e.target.result);
             let data = imported.data || imported; // Support both new format (v2.0) and old format
@@ -5910,41 +6049,46 @@ function importAllData(event) {
             if (confirm(summary + '\n\nProceed with import?')) {
                 const attachmentBlobs = imported.attachmentBlobs || {};
                 const normalizedData = normalizeData(completeData);
+                const keys = Object.keys(attachmentBlobs);
+                let attachmentWarn = false;
 
-                const restoreBlobs = () => {
-                    const keys = Object.keys(attachmentBlobs);
-                    if (keys.length === 0) {
-                        saveData(normalizedData);
-                        localStorage.removeItem('currentUser');
-                        currentUser = null;
-                        alert('✅ Data imported successfully!\n\nAll data has been restored from the backup file.\n\nYou will need to login again.');
-                        location.reload();
+                if (keys.length > 0) {
+                    try {
+                        await Promise.all(keys.map(key => {
+                            const idx = key.indexOf('_');
+                            const locationId = parseInt(key.substring(0, idx), 10);
+                            const attachmentId = key.substring(idx + 1);
+                            const attIdNum = /^\d+\.?\d*$/.test(attachmentId) ? parseFloat(attachmentId) : attachmentId;
+                            return putAttachmentBlob(locationId, attIdNum, attachmentBlobs[key]);
+                        }));
+                    } catch (err) {
+                        console.warn('Some attachment blobs could not be restored.', err);
+                        attachmentWarn = true;
+                    }
+                }
+
+                saveData(normalizedData);
+
+                if (isApiMode() && currentUser) {
+                    let ok = await flushWorkspaceToApiNow();
+                    if (!ok) ok = await flushWorkspaceToApiNow();
+                    if (!ok) {
+                        alert('❌ Import could not be saved to the server.\n\nYou are still signed in; do not refresh this page yet. Check your connection, then try importing the file again.');
+                        event.target.value = '';
                         return;
                     }
-                    const promises = keys.map(key => {
-                        const idx = key.indexOf('_');
-                        const locationId = parseInt(key.substring(0, idx), 10);
-                        const attachmentId = key.substring(idx + 1);
-                        const attIdNum = /^\d+\.?\d*$/.test(attachmentId) ? parseFloat(attachmentId) : attachmentId;
-                        return putAttachmentBlob(locationId, attIdNum, attachmentBlobs[key]);
-                    });
-                    Promise.all(promises).then(() => {
-                        saveData(normalizedData);
-                        localStorage.removeItem('currentUser');
-                        currentUser = null;
-                        alert('✅ Data imported successfully!\n\nAll data has been restored from the backup file.\n\nYou will need to login again.');
-                        location.reload();
-                    }).catch(err => {
-                        console.warn('Some attachment blobs could not be restored.', err);
-                        saveData(normalizedData);
-                        localStorage.removeItem('currentUser');
-                        currentUser = null;
-                        alert('✅ Data imported with warnings. Some file attachments may be missing.\n\nYou will need to login again.');
-                        location.reload();
-                    });
-                };
+                }
 
-                restoreBlobs();
+                localStorage.removeItem('currentUser');
+                currentUser = null;
+                if (isApiMode()) __workspaceCache = null;
+
+                if (attachmentWarn) {
+                    alert('✅ Data imported with warnings. Some file attachments may be missing.\n\nYou will need to login again.');
+                } else {
+                    alert('✅ Data imported successfully!\n\nAll data has been restored from the backup file.\n\nYou will need to login again.');
+                }
+                location.reload();
             } else {
                 alert('Import cancelled.');
             }
@@ -5982,7 +6126,7 @@ function autoExportData(data) {
         };
 
         const exportData = {
-            version: '10.0',
+            version: '11.0',
             exportDate: new Date().toISOString(),
         applicationName: 'Task Management System',
             data: completeData
@@ -7448,7 +7592,7 @@ function renderMilestones() {
 
     const milestonesHtml = filteredMilestones.length > 0
         ? filteredMilestones.map(milestone => `
-            <div class="task-item" style="padding: 15px; margin-bottom: 10px; border-left: 4px solid #667eea;">
+            <div class="task-item milestone-card-click" style="padding: 15px; margin-bottom: 10px; border-left: 4px solid #667eea;" onclick="openMilestoneViewModal(${milestone.id})" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openMilestoneViewModal(${milestone.id});}">
                 <div style="display: flex; justify-content: space-between; align-items: start;">
                     <div style="flex: 1;">
                         <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
@@ -7456,18 +7600,18 @@ function renderMilestones() {
                         </div>
                         <div style="margin-bottom: 8px;">
                             <strong>Description:</strong>
-                            <p style="margin: 5px 0; color: #333;">${milestone.description || ''}</p>
+                            <p style="margin: 5px 0; color: #333; white-space: pre-wrap;">${escapeHtml(milestone.description || '')}</p>
                         </div>
                         ${milestone.comment ? `
                         <div>
                             <strong>Comment:</strong>
-                            <p style="margin: 5px 0; color: #666; font-style: italic;">${milestone.comment}</p>
+                            <p style="margin: 5px 0; color: #666; font-style: italic; white-space: pre-wrap;">${escapeHtml(milestone.comment)}</p>
                         </div>
                         ` : ''}
                     </div>
-                    <div style="display: flex; gap: 5px;">
-                        <button class="btn btn-primary" onclick="editMilestone(${milestone.id})" style="padding: 5px 10px; font-size: 12px;">Edit</button>
-                        <button class="btn btn-danger" onclick="deleteMilestone(${milestone.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>
+                    <div style="display: flex; gap: 5px;" onclick="event.stopPropagation();">
+                        <button type="button" class="btn btn-primary" onclick="editMilestone(${milestone.id})" style="padding: 5px 10px; font-size: 12px;">Edit</button>
+                        <button type="button" class="btn btn-danger" onclick="deleteMilestone(${milestone.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>
                     </div>
                 </div>
             </div>
@@ -7475,6 +7619,34 @@ function renderMilestones() {
         : '<p style="text-align: center; color: #999; padding: 20px;">No milestones found. Click "Add Milestone" to create one.</p>';
 
     document.getElementById('milestonesList').innerHTML = milestonesHtml;
+}
+
+function openMilestoneViewModal(milestoneId) {
+    const data = getData();
+    const milestone = (data.milestones || []).find(m => m.id === milestoneId);
+    if (!milestone) return;
+    document.getElementById('milestoneViewTitle').textContent = 'Milestone';
+    document.getElementById('milestoneViewDate').textContent = formatDateDisplay(milestone.date);
+    document.getElementById('milestoneViewDescription').textContent = milestone.description || '';
+    const cw = document.getElementById('milestoneViewCommentWrap');
+    const cc = document.getElementById('milestoneViewComment');
+    if (milestone.comment) {
+        cw.style.display = 'block';
+        cc.textContent = milestone.comment;
+    } else {
+        cw.style.display = 'none';
+        cc.textContent = '';
+    }
+    const editBtn = document.getElementById('milestoneViewEditBtn');
+    editBtn.onclick = () => {
+        closeMilestoneViewModal();
+        editMilestone(milestoneId);
+    };
+    document.getElementById('milestoneViewModal').classList.add('active');
+}
+
+function closeMilestoneViewModal() {
+    document.getElementById('milestoneViewModal').classList.remove('active');
 }
 
 function openMilestoneModal(milestoneId = null) {
