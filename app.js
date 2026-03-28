@@ -1,4 +1,4 @@
-const APP_VERSION = '12.0';
+const APP_VERSION = '12.0.1';
 
 // Data Storage
 let currentUser = null;
@@ -49,6 +49,8 @@ async function putWorkspaceCacheToServer() {
             console.error('Workspace sync failed', err);
             return false;
         }
+        const body = await res.json();
+        __workspaceCache = normalizeData(body);
         return true;
     } catch (e) {
         console.error('Workspace sync error', e);
@@ -528,8 +530,17 @@ function normalizeData(data) {
         };
     }
 
+    const rawUsers = Array.isArray(data.users) ? data.users : [];
+    const users = rawUsers.map(u => {
+        if (!u || typeof u !== 'object') return u;
+        const idNum = typeof u.id === 'number' && Number.isFinite(u.id)
+            ? u.id
+            : parseInt(String(u.id), 10);
+        const id = Number.isNaN(idNum) ? u.id : idNum;
+        return { ...u, id };
+    });
     return {
-        users: Array.isArray(data.users) ? data.users : [],
+        users,
         tasks: Array.isArray(data.tasks) ? data.tasks : [],
         locations: Array.isArray(data.locations) ? data.locations : (data.locations || []),
         segregationTypes: Array.isArray(data.segregationTypes) ? data.segregationTypes : (data.segregationTypes || []),
@@ -592,7 +603,16 @@ function checkAuth() {
         if (currentUser.role === 'admin') {
             document.body.classList.add('user-admin');
         }
-        if (masterHint) masterHint.style.display = currentUser.isMaster ? 'inline-block' : 'none';
+        if (masterHint) {
+            masterHint.style.display = currentUser.isMaster ? 'inline-block' : 'none';
+            if (masterHint.getAttribute('data-settings-link-wired') !== '1') {
+                masterHint.setAttribute('data-settings-link-wired', '1');
+                masterHint.addEventListener('click', (ev) => {
+                    ev.preventDefault();
+                    switchTab('settings');
+                });
+            }
+        }
     } else {
         currentUser = null;
         document.getElementById('loginModal').classList.add('active');
@@ -834,7 +854,8 @@ function showError(elementId, message) {
 
 // Tab Navigation
 function switchTab(tabName, eventElement, skipAutoRender = false) {
-    if (tabName === 'settings' && (!currentUser || currentUser.role !== 'admin')) {
+    const canSettings = currentUser && (currentUser.role === 'admin' || currentUser.isMaster);
+    if (tabName === 'settings' && !canSettings) {
         return;
     }
     document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
@@ -4987,7 +5008,7 @@ function changeMonth(direction) {
 
 // Users
 function renderUsers() {
-    if (currentUser.role !== 'admin') return;
+    if (currentUser.role !== 'admin' && !currentUser.isMaster) return;
 
     const data = getData();
     const masterReadOnly = isApiMode() && currentUser.isMaster;
@@ -5084,10 +5105,12 @@ function editUser(userId) {
 
 function deleteUser(userId) {
     if (!confirm('Are you sure you want to delete this user?')) return;
+    const uid = typeof userId === 'number' ? userId : parseInt(String(userId), 10);
+    if (Number.isNaN(uid)) return;
 
     updateData(data => {
-        data.users = data.users.filter(u => u.id !== userId);
-        data.tasks = data.tasks.filter(t => t.assigned_to !== userId && t.created_by !== userId);
+        data.users = data.users.filter(u => Number(u.id) !== uid);
+        data.tasks = data.tasks.filter(t => Number(t.assigned_to) !== uid && Number(t.created_by) !== uid);
     });
 
     renderUsers();
@@ -5095,7 +5118,7 @@ function deleteUser(userId) {
 
 // Settings
 function renderSettings() {
-    if (currentUser.role !== 'admin') return;
+    if (currentUser.role !== 'admin' && !currentUser.isMaster) return;
 
     const data = getData();
 

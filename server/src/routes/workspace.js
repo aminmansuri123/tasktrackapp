@@ -12,7 +12,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '12.0';
+const EXPORT_VERSION = '12.0.1';
 
 function resolveTenantRoot(req) {
   if (req.user.isMaster) return null;

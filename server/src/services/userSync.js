@@ -53,8 +53,8 @@ async function syncUsersFromClientPayload(usersPayload, { isAdmin, tenantRootUse
   for (const u of usersPayload) {
     if (!u || typeof u.email !== 'string') continue;
     const email = u.email.toLowerCase().trim();
-    const userId = typeof u.id === 'number' ? u.id : parseInt(u.id, 10);
-    if (!email || Number.isNaN(userId)) continue;
+    const userId = coerceTenantUserId(u.id);
+    if (!email || userId == null) continue;
 
     const existing = await User.findOne({ $or: [{ userId }, { email }] });
     const passwordPlain = typeof u.password === 'string' && u.password.length > 0 ? u.password : null;
@@ -98,13 +98,41 @@ async function syncUsersFromClientPayload(usersPayload, { isAdmin, tenantRootUse
   }
 }
 
-async function deleteUsersNotInPayload(allowedUserIds, tenantRootUserId) {
-  if (tenantRootUserId == null) return;
-  const ids = new Set(allowedUserIds.filter((id) => typeof id === 'number' && !Number.isNaN(id)));
+/** Match client/Mongo user ids (numbers or numeric strings). */
+function coerceTenantUserId(raw) {
+  if (raw == null || raw === '') return null;
+  const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
+  return Number.isFinite(n) && !Number.isNaN(n) ? n : null;
+}
+
+/**
+ * Remove tenant User docs not listed in the payload. Safe coercion: string ids from JSON
+ * are accepted. If the payload lists users but none parse to valid ids, skip (avoid wiping
+ * the tenant). Tenant root user is always kept.
+ */
+async function deleteUsersNotInPayload(allowedUserIdsRaw, tenantRootUserId) {
+  if (tenantRootUserId == null || !Number.isFinite(tenantRootUserId)) return;
+  if (!Array.isArray(allowedUserIdsRaw)) return;
+
+  const allowed = new Set();
+  for (const raw of allowedUserIdsRaw) {
+    const n = coerceTenantUserId(raw);
+    if (n != null) allowed.add(n);
+  }
+
+  if (allowedUserIdsRaw.length > 0 && allowed.size === 0) {
+    console.warn('deleteUsersNotInPayload: skipped — no valid user ids in payload (would have deleted all tenant users)');
+    return;
+  }
+  if (allowed.size === 0) return;
+
+  allowed.add(tenantRootUserId);
+
   const all = await User.find({ tenantRootUserId });
   for (const u of all) {
     if (u.isMaster) continue;
-    if (!ids.has(u.userId)) {
+    if (u.userId === tenantRootUserId) continue;
+    if (!allowed.has(u.userId)) {
       await User.deleteOne({ _id: u._id });
     }
   }

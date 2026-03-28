@@ -934,7 +934,7 @@
 
         .master-tools-hint {
             font-size: 12px;
-            color: #5c6bc0;
+            color: rgba(255, 255, 255, 0.95);
             max-width: 220px;
             text-align: right;
             background: none;
@@ -943,10 +943,11 @@
             font: inherit;
             padding: 0;
             text-decoration: underline;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
         }
 
         .master-tools-hint:hover {
-            color: #3949ab;
+            color: #fff;
         }
 
         .login-master-link {
@@ -1328,11 +1329,11 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Tracking System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.1</span></span>
             </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
-                <button type="button" id="masterToolsHint" class="master-tools-hint" style="display: none;" title="Open Settings" onclick="switchTab('settings', document.querySelector('.nav-tab[onclick*=\"settings\"]'))">Master tools → Settings (⚙)</button>
+                <button type="button" id="masterToolsHint" class="master-tools-hint" style="display: none;" title="Open Settings">Master tools → Settings (⚙)</button>
                 <button class="btn btn-secondary" onclick="logout()">Logout</button>
             </div>
         </div>
@@ -2134,7 +2135,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">12.0</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.1</span></p>
         </footer>
     </div>
 
@@ -2185,7 +2186,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.1</span></p>
                     </div>
                 </div>
             </div>
@@ -2857,7 +2858,7 @@
     </div>
 
     <script src="config.js"></script>
-    <script src="app.js?v=12.0"></script>
+    <script src="app.js?v=12.0.1"></script>
 </body>
 
 </html>
