@@ -646,12 +646,28 @@ function setLoginPanelMode(mode) {
 }
 
 function submitLoginPanel() {
-    const mode = document.getElementById('loginModal')?.getAttribute('data-login-mode') || 'signin';
+    const modal = document.getElementById('loginModal');
+    const mode = (modal && modal.getAttribute('data-login-mode')) || 'signin';
     if (mode === 'register') {
         register();
     } else {
         login();
     }
+}
+
+/** Wire login UI without inline onclick (avoids ReferenceError on some static hosts / cached HTML+JS mismatches). */
+function wireLoginScreenControls() {
+    const modal = document.getElementById('loginModal');
+    if (!modal || modal.getAttribute('data-wired-ui') === '1') return;
+    modal.setAttribute('data-wired-ui', '1');
+    const submitBtn = document.getElementById('loginSubmitBtn');
+    if (submitBtn) submitBtn.addEventListener('click', submitLoginPanel);
+    const tSign = document.getElementById('loginTabSignin');
+    const tReg = document.getElementById('loginTabRegister');
+    const tMas = document.getElementById('loginTabMaster');
+    if (tSign) tSign.addEventListener('click', () => setLoginPanelMode('signin'));
+    if (tReg) tReg.addEventListener('click', () => setLoginPanelMode('register'));
+    if (tMas) tMas.addEventListener('click', () => setLoginPanelMode('master'));
 }
 
 async function goToMasterLogin() {
@@ -728,7 +744,8 @@ async function login() {
 }
 
 async function register() {
-    if (document.getElementById('loginModal')?.getAttribute('data-login-mode') !== 'register') {
+    const loginModalEl = document.getElementById('loginModal');
+    if (!loginModalEl || loginModalEl.getAttribute('data-login-mode') !== 'register') {
         showError('loginError', 'Use the "Create account" tab to register.');
         return;
     }
@@ -794,6 +811,10 @@ async function register() {
     checkAuth();
     init();
 }
+
+window.setLoginPanelMode = setLoginPanelMode;
+window.submitLoginPanel = submitLoginPanel;
+window.goToMasterLogin = goToMasterLogin;
 
 async function logout() {
     if (isApiMode()) {
@@ -9407,8 +9428,11 @@ async function bootstrapApp() {
     init();
 }
 
+wireLoginScreenControls();
+
 // Initialize on load
 window.addEventListener('DOMContentLoaded', () => {
+    wireLoginScreenControls();
     bootstrapApp().catch(err => console.error(err));
 });
 

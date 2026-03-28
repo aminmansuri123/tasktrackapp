@@ -1922,9 +1922,9 @@
                 <p>Sign in or create an account to continue</p>
             </div>
             <div class="login-segment" role="tablist">
-                <button type="button" id="loginTabSignin" class="active" onclick="setLoginPanelMode('signin')" aria-selected="true">Sign in</button>
-                <button type="button" id="loginTabRegister" onclick="setLoginPanelMode('register')" aria-selected="false">Create account</button>
-                <button type="button" id="loginTabMaster" onclick="setLoginPanelMode('master')" aria-selected="false">Master</button>
+                <button type="button" id="loginTabSignin" class="active" aria-selected="true">Sign in</button>
+                <button type="button" id="loginTabRegister" aria-selected="false">Create account</button>
+                <button type="button" id="loginTabMaster" aria-selected="false">Master</button>
             </div>
             <div id="loginNameGroup" class="form-group hidden">
                 <label for="loginName">Name</label>
@@ -1938,7 +1938,7 @@
                 <label for="loginPassword">Password</label>
                 <input type="password" class="form-control" id="loginPassword" name="password" placeholder="Min. 6 characters" autocomplete="off" required>
             </div>
-            <button type="button" class="login-primary" id="loginSubmitBtn" onclick="submitLoginPanel()">Sign in</button>
+            <button type="button" class="login-primary" id="loginSubmitBtn">Sign in</button>
             <p id="loginModeHint" class="login-hint">Use your workspace email and password. Nothing is saved in the browser except your session profile after login.</p>
             <div id="loginError" style="margin-top: 15px;"></div>
         </div>
@@ -2609,7 +2609,7 @@
     </div>
 
     <script src="config.js"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=11.0.1"></script>
 </body>
 
 </html>
