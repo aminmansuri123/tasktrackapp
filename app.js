@@ -1,4 +1,4 @@
-const APP_VERSION = '12.0.5';
+const APP_VERSION = '12.0.6';
 
 let __loginErrorDismissTimer = null;
 
@@ -60,6 +60,7 @@ let drilldownContext = null; // Stores: { type, title, count, filterFunction, mo
 // --- API / cloud sync (when window.API_BASE_URL is set in config.js) ---
 let __workspaceCache = null;
 let __workspacePushTimer = null;
+let __lastWorkspacePutError = '';
 const WORKSPACE_PUSH_DEBOUNCE_MS = 400;
 
 function isApiMode() {
@@ -97,18 +98,32 @@ function scheduleWorkspacePush() {
 
 async function putWorkspaceCacheToServer() {
     if (!isApiMode() || !__workspaceCache) return false;
+    __lastWorkspacePutError = '';
     try {
         const payload = buildWorkspacePayloadForPut();
         const res = await apiFetch('/api/workspace', { method: 'PUT', body: JSON.stringify(payload) });
         if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            console.error('Workspace sync failed', err);
+            let detail = `Server returned ${res.status}`;
+            try {
+                const t = await res.text();
+                if (t) {
+                    try {
+                        const j = JSON.parse(t);
+                        if (j.error) detail = j.error;
+                    } catch {
+                        detail = t.slice(0, 240);
+                    }
+                }
+            } catch (_) { /* ignore */ }
+            __lastWorkspacePutError = detail;
+            console.error('Workspace sync failed', detail);
             return false;
         }
         const body = await res.json();
         applyWorkspacePutSuccess(normalizeData(body));
         return true;
     } catch (e) {
+        __lastWorkspacePutError = e && e.message ? String(e.message) : 'Network or client error';
         console.error('Workspace sync error', e);
         return false;
     }
@@ -5408,7 +5423,11 @@ async function saveUser(event) {
     if (isApiMode() && currentUser && !currentUser.isMaster) {
         const ok = await flushWorkspaceToApiNow();
         if (!ok) {
-            alert('Could not save users to the server. Check your connection, then open Settings and save again.');
+            alert(
+                __lastWorkspacePutError
+                    ? `${__lastWorkspacePutError}\n\nOpen Settings and try again, or check your connection.`
+                    : 'Could not save users to the server. Check your connection, then open Settings and save again.'
+            );
         }
     }
 }
@@ -5433,7 +5452,11 @@ async function deleteUser(userId) {
     if (isApiMode() && currentUser && !currentUser.isMaster) {
         const ok = await flushWorkspaceToApiNow();
         if (!ok) {
-            alert('Could not sync user deletion to the server. Check your connection.');
+            alert(
+                __lastWorkspacePutError
+                    ? `${__lastWorkspacePutError}\n\nCheck your connection and try again.`
+                    : 'Could not sync user deletion to the server. Check your connection.'
+            );
         }
     }
 }
@@ -5473,6 +5496,23 @@ function renderSettings() {
                     </tr>`;
                 }).join('');
             masterSec.innerHTML = `
+                <h3 style="margin-top:0;">Self-service registration</h3>
+                <p style="color:#666;font-size:13px;">Who may use <strong>Create account</strong> on the login screen. If they are not allowed, they see: <em>Creation not allowed</em>.</p>
+                <div style="display:flex;flex-direction:column;gap:8px;margin:12px 0;">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="masterRegMode" id="masterRegModeOpen" value="open"> Anyone may register</label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="masterRegMode" id="masterRegModeEmail" value="email_list"> Only specific email addresses (list below)</label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="masterRegMode" id="masterRegModeDomain" value="domain_list"> Only addresses from specific domains (list below)</label>
+                </div>
+                <div class="form-group">
+                    <label>Allowed emails (one per line)</label>
+                    <textarea id="masterRegEmails" class="form-control" rows="4" placeholder="user1@company.com&#10;user2@company.com"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Allowed domains (one per line, e.g. ameyalogistics.com). Subdomains are allowed automatically.</label>
+                    <textarea id="masterRegDomains" class="form-control" rows="3" placeholder="company.com"></textarea>
+                </div>
+                <button type="button" class="btn btn-primary" onclick="saveMasterRegistrationPolicy()">Save registration rules</button>
+                <hr style="margin:28px 0;border:none;border-top:1px solid #e5e5e5;">
                 <h3>Master password reset</h3>
                 <p style="color:#666;font-size:13px;">All accounts are listed in <strong>User Management</strong> above. Set a new login password for any user (including other admins) below. Uses the hosted API only.</p>
                 <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:10px;">
@@ -5495,6 +5535,7 @@ function renderSettings() {
                     </table>
                 </div>
             `;
+            void masterRegistrationPolicyHydrate();
         } else {
             masterSec.style.display = 'none';
             masterSec.innerHTML = '';
@@ -5564,6 +5605,54 @@ function renderSettings() {
                 note.style.display = note.textContent ? 'block' : 'none';
             }
         }
+    }
+}
+
+async function masterRegistrationPolicyHydrate() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const rOpen = document.getElementById('masterRegModeOpen');
+    if (!rOpen) return;
+    try {
+        const res = await apiFetch('/api/master/registration-policy');
+        if (!res.ok) return;
+        const p = await res.json();
+        const mode = p.registrationMode || 'open';
+        const rEmail = document.getElementById('masterRegModeEmail');
+        const rDom = document.getElementById('masterRegModeDomain');
+        rOpen.checked = mode === 'open';
+        if (rEmail) rEmail.checked = mode === 'email_list';
+        if (rDom) rDom.checked = mode === 'domain_list';
+        const te = document.getElementById('masterRegEmails');
+        const td = document.getElementById('masterRegDomains');
+        if (te && Array.isArray(p.allowedEmails)) te.value = p.allowedEmails.join('\n');
+        if (td && Array.isArray(p.allowedDomains)) td.value = p.allowedDomains.join('\n');
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function saveMasterRegistrationPolicy() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const sel = document.querySelector('input[name="masterRegMode"]:checked');
+    const mode = (sel && sel.value) || 'open';
+    const emailsRaw = (document.getElementById('masterRegEmails') && document.getElementById('masterRegEmails').value) || '';
+    const domainsRaw = (document.getElementById('masterRegDomains') && document.getElementById('masterRegDomains').value) || '';
+    const allowedEmails = emailsRaw.split(/[\n,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    const allowedDomains = domainsRaw.split(/[\n,;]+/).map(s => s.trim().toLowerCase().replace(/^@+/, '')).filter(Boolean);
+    try {
+        const res = await apiFetch('/api/master/registration-policy', {
+            method: 'PUT',
+            body: JSON.stringify({ registrationMode: mode, allowedEmails, allowedDomains }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Could not save registration rules.');
+            return;
+        }
+        alert('Registration rules saved.');
+    } catch (e) {
+        console.error(e);
+        alert('Request failed. Check your connection and API URL.');
     }
 }
 

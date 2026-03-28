@@ -61,9 +61,18 @@ async function migrateLegacyTenants() {
     const workspaces = await Workspace.find({});
     const legacyWs = workspaces.find((w) => w.tenantRootUserId == null);
     if (legacyWs) {
-      legacyWs.tenantRootUserId = rootId;
-      await legacyWs.save();
-      console.log('Assigned legacy workspace to tenant root userId', rootId);
+      const canonical = await Workspace.findOne({ tenantRootUserId: rootId });
+      if (canonical) {
+        await Workspace.deleteOne({ _id: legacyWs._id });
+        console.log(
+          'Removed orphan legacy workspace; canonical workspace already exists for tenant root',
+          rootId
+        );
+      } else {
+        legacyWs.tenantRootUserId = rootId;
+        await legacyWs.save();
+        console.log('Assigned legacy workspace to tenant root userId', rootId);
+      }
     }
 
     for (const u of users) {

@@ -6,8 +6,45 @@ const requireMaster = require('../middleware/requireMaster');
 const { usersToClientShapeForTenant } = require('../services/userSync');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
+const { getSiteSettings, sanitizePolicyBody } = require('../services/registrationPolicy');
 
 const router = express.Router();
+
+router.get('/registration-policy', authMiddleware, requireMaster, async (_req, res) => {
+  try {
+    const s = await getSiteSettings();
+    return res.json({
+      registrationMode: s.registrationMode,
+      allowedEmails: s.allowedEmails || [],
+      allowedDomains: s.allowedDomains || [],
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load registration policy' });
+  }
+});
+
+router.put('/registration-policy', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const parsed = sanitizePolicyBody(req.body || {});
+    if (parsed.error) {
+      return res.status(400).json({ error: parsed.error });
+    }
+    const s = await getSiteSettings();
+    s.registrationMode = parsed.registrationMode;
+    s.allowedEmails = parsed.allowedEmails;
+    s.allowedDomains = parsed.allowedDomains;
+    await s.save();
+    return res.json({
+      registrationMode: s.registrationMode,
+      allowedEmails: s.allowedEmails,
+      allowedDomains: s.allowedDomains,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to save registration policy' });
+  }
+});
 
 router.post('/users/:userId/password', authMiddleware, requireMaster, async (req, res) => {
   try {

@@ -5,6 +5,7 @@ const { signToken, authMiddleware, resolveAuthDecoded } = require('../middleware
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const { isProduction } = require('../config');
 const { usersToClientShapeAll } = require('../services/userSync');
+const { assertRegistrationAllowed, getSiteSettings } = require('../services/registrationPolicy');
 
 const router = express.Router();
 
@@ -29,6 +30,16 @@ function publicUser(u) {
   };
 }
 
+router.get('/registration-policy', async (_req, res) => {
+  try {
+    const s = await getSiteSettings();
+    return res.json({ registrationMode: s.registrationMode || 'open' });
+  } catch (e) {
+    console.error(e);
+    return res.json({ registrationMode: 'open' });
+  }
+});
+
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password } = req.body || {};
@@ -39,6 +50,10 @@ router.post('/register', async (req, res) => {
     const exists = await User.findOne({ email: em });
     if (exists) {
       return res.status(400).json({ error: 'Email already registered' });
+    }
+    const denied = await assertRegistrationAllowed(em);
+    if (denied) {
+      return res.status(403).json({ error: denied });
     }
     const userId = Date.now();
     const passwordHash = await bcrypt.hash(String(password), 12);

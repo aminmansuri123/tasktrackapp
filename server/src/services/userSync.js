@@ -91,16 +91,36 @@ async function syncUsersFromClientPayload(usersPayload, { isAdmin, tenantRootUse
       if (!passwordPlain) continue;
       const passwordHash = await bcrypt.hash(passwordPlain, 12);
       const isMaster = email === MASTER_EMAIL;
-      await User.create({
-        userId,
-        email,
-        name: u.name || email,
-        passwordHash,
-        role: isMaster ? 'admin' : u.role === 'admin' ? 'admin' : 'user',
-        isActive: u.is_active !== false,
-        isMaster,
-        tenantRootUserId: isMaster ? null : tenantRootUserId,
-      });
+      const assignId = await allocateUniqueUserId(userId);
+      try {
+        await User.create({
+          userId: assignId,
+          email,
+          name: u.name || email,
+          passwordHash,
+          role: isMaster ? 'admin' : u.role === 'admin' ? 'admin' : 'user',
+          isActive: u.is_active !== false,
+          isMaster,
+          tenantRootUserId: isMaster ? null : tenantRootUserId,
+        });
+      } catch (e) {
+        const dupKey = e && e.keyPattern ? Object.keys(e.keyPattern)[0] : '';
+        if (e && e.code === 11000 && dupKey === 'userId') {
+          const retryId = await allocateUniqueUserId(Date.now() + Math.floor(Math.random() * 1e6));
+          await User.create({
+            userId: retryId,
+            email,
+            name: u.name || email,
+            passwordHash,
+            role: isMaster ? 'admin' : u.role === 'admin' ? 'admin' : 'user',
+            isActive: u.is_active !== false,
+            isMaster,
+            tenantRootUserId: isMaster ? null : tenantRootUserId,
+          });
+        } else {
+          throw e;
+        }
+      }
     }
   }
 }
@@ -110,6 +130,20 @@ function coerceTenantUserId(raw) {
   if (raw == null || raw === '') return null;
   const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
   return Number.isFinite(n) && !Number.isNaN(n) ? n : null;
+}
+
+async function allocateUniqueUserId(preferred) {
+  let id =
+    typeof preferred === 'number' && Number.isFinite(preferred) && !Number.isNaN(preferred)
+      ? preferred
+      : Date.now();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    // eslint-disable-next-line no-await-in-loop
+    const clash = await User.findOne({ userId: id });
+    if (!clash) return id;
+    id = Date.now() + attempt * 97 + Math.floor(Math.random() * 9999);
+  }
+  throw new Error('Could not allocate unique userId');
 }
 
 /**
