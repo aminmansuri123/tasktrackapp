@@ -31,6 +31,15 @@
             display: block !important;
         }
 
+        /* Avoid flash of login screen while /api/auth/me runs (cloud mode only). */
+        body.app-bootstrapping .container {
+            visibility: hidden !important;
+        }
+
+        body.app-bootstrapping #loginModal.login-screen {
+            visibility: hidden !important;
+        }
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -1341,7 +1350,7 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Tracking System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.3</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.4</span></span>
             </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
@@ -2152,12 +2161,12 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.3</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.4</span></p>
         </footer>
     </div>
 
     <!-- Login (full-page gate) -->
-    <div id="loginModal" class="modal login-screen active" data-login-mode="signin" aria-modal="true" role="dialog">
+    <div id="loginModal" class="modal login-screen" data-login-mode="signin" aria-modal="true" role="dialog">
         <div class="login-split-layout">
             <aside class="login-visual-panel" aria-hidden="true">
                 <div class="login-visual-inner">
@@ -2203,7 +2212,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.3</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.4</span></p>
                     </div>
                 </div>
             </div>
@@ -2391,7 +2400,7 @@
                 <h2 id="userModalTitle">New User</h2>
                 <button class="close-btn" onclick="closeUserModal()">&times;</button>
             </div>
-            <form id="userForm" onsubmit="saveUser(event)">
+            <form id="userForm" onsubmit="void saveUser(event)">
                 <div class="form-group">
                     <label>Name *</label>
                     <input type="text" class="form-control" id="userName" required>
@@ -2912,7 +2921,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=12.0.3"></script>
+    <script src="app.js?v=12.0.4"></script>
 </body>
 
 </html>

@@ -1,4 +1,6 @@
-const APP_VERSION = '12.0.3';
+const APP_VERSION = '12.0.4';
+
+let __loginErrorDismissTimer = null;
 
 /** Plaintext passwords for User rows not yet confirmed by a successful workspace sync (never in localStorage). */
 const __pendingPasswordsByUserId = new Map();
@@ -112,6 +114,12 @@ async function flushWorkspaceToApiNow() {
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && isApiMode() && currentUser && !currentUser.isMaster) {
         flushWorkspaceToApi();
+    }
+});
+
+window.addEventListener('pagehide', () => {
+    if (isApiMode() && currentUser && !currentUser.isMaster && __workspaceCache) {
+        void flushWorkspaceToApiNow();
     }
 });
 
@@ -788,7 +796,44 @@ async function login() {
             showError('loginError', err.error || 'Invalid email or password');
             return;
         }
-        const body = await res.json();
+        let body;
+        try {
+            body = await res.json();
+        } catch (parseErr) {
+            console.error('Login response parse:', parseErr);
+            try {
+                const me = await apiFetch('/api/auth/me');
+                if (me.ok) {
+                    try {
+                        currentUser = await me.json();
+                    } catch (meParse) {
+                        console.error(meParse);
+                        throw meParse;
+                    }
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    try {
+                        await apiPullWorkspace();
+                    } catch (pullErr) {
+                        console.error('Workspace load after login:', pullErr);
+                        __workspaceCache = normalizeData(defaultWorkspaceShell());
+                    }
+                    const lp = document.getElementById('loginPassword');
+                    if (lp) lp.value = '';
+                    clearLoginFormError();
+                    checkAuth();
+                    try {
+                        init();
+                    } catch (initErr) {
+                        console.error('init after login:', initErr);
+                    }
+                    return;
+                }
+            } catch (recoverErr) {
+                console.error(recoverErr);
+            }
+            showError('loginError', 'Signed in may have worked — try refreshing. Otherwise check API URL and CORS.');
+            return;
+        }
         currentUser = body.user;
         localStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
@@ -862,7 +907,44 @@ async function register() {
             showError('loginError', err.error || 'Registration failed');
             return;
         }
-        const body = await res.json();
+        let body;
+        try {
+            body = await res.json();
+        } catch (parseErr) {
+            console.error('Register response parse:', parseErr);
+            try {
+                const me = await apiFetch('/api/auth/me');
+                if (me.ok) {
+                    try {
+                        currentUser = await me.json();
+                    } catch (meParse) {
+                        console.error(meParse);
+                        throw meParse;
+                    }
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    try {
+                        await apiPullWorkspace();
+                    } catch (pullErr) {
+                        console.error('Workspace load after register:', pullErr);
+                        __workspaceCache = normalizeData(defaultWorkspaceShell());
+                    }
+                    const lp = document.getElementById('loginPassword');
+                    if (lp) lp.value = '';
+                    clearLoginFormError();
+                    checkAuth();
+                    try {
+                        init();
+                    } catch (initErr) {
+                        console.error('init after register:', initErr);
+                    }
+                    return;
+                }
+            } catch (recoverErr) {
+                console.error(recoverErr);
+            }
+            showError('loginError', 'Registration may have succeeded — try signing in. If the problem continues, check API URL and CORS settings.');
+            return;
+        }
         currentUser = body.user;
         localStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
@@ -987,13 +1069,25 @@ async function logout() {
 
 function showError(elementId, message) {
     const element = document.getElementById(elementId);
+    if (!element) return;
+    if (elementId === 'loginError' && __loginErrorDismissTimer) {
+        clearTimeout(__loginErrorDismissTimer);
+        __loginErrorDismissTimer = null;
+    }
     element.innerHTML = `<div class="alert alert-error">${message}</div>`;
-    setTimeout(() => {
+    const ms = elementId === 'loginError' ? 8000 : 3000;
+    const t = setTimeout(() => {
         element.innerHTML = '';
-    }, 3000);
+        if (elementId === 'loginError') __loginErrorDismissTimer = null;
+    }, ms);
+    if (elementId === 'loginError') __loginErrorDismissTimer = t;
 }
 
 function clearLoginFormError() {
+    if (__loginErrorDismissTimer) {
+        clearTimeout(__loginErrorDismissTimer);
+        __loginErrorDismissTimer = null;
+    }
     const el = document.getElementById('loginError');
     if (el) el.innerHTML = '';
 }
@@ -5231,10 +5325,15 @@ function closeUserModal() {
     document.getElementById('userModal').classList.remove('active');
 }
 
-function saveUser(event) {
+async function saveUser(event) {
     event.preventDefault();
     const userId = document.getElementById('userId').value;
     const password = document.getElementById('userPassword').value;
+
+    if (!userId && (!password || password.length < 6)) {
+        alert('Password is required (min 6 characters) for new users.');
+        return;
+    }
 
     updateData(data => {
         if (userId) {
@@ -5264,13 +5363,20 @@ function saveUser(event) {
 
     closeUserModal();
     renderUsers();
+
+    if (isApiMode() && currentUser && !currentUser.isMaster) {
+        const ok = await flushWorkspaceToApiNow();
+        if (!ok) {
+            alert('Could not save users to the server. Check your connection, then open Settings and save again.');
+        }
+    }
 }
 
 function editUser(userId) {
     openUserModal(userId);
 }
 
-function deleteUser(userId) {
+async function deleteUser(userId) {
     if (!confirm('Are you sure you want to delete this user?')) return;
     const uid = typeof userId === 'number' ? userId : parseInt(String(userId), 10);
     if (Number.isNaN(uid)) return;
@@ -5282,6 +5388,13 @@ function deleteUser(userId) {
     });
 
     renderUsers();
+
+    if (isApiMode() && currentUser && !currentUser.isMaster) {
+        const ok = await flushWorkspaceToApiNow();
+        if (!ok) {
+            alert('Could not sync user deletion to the server. Check your connection.');
+        }
+    }
 }
 
 // Settings
@@ -9764,10 +9877,34 @@ async function bootstrapApp() {
         init();
         return;
     }
+
+    document.body.classList.add('app-bootstrapping');
     try {
-        const res = await apiFetch('/api/auth/me');
+        let res;
+        try {
+            res = await apiFetch('/api/auth/me');
+        } catch (fetchErr) {
+            console.warn('API bootstrap fetch failed', fetchErr);
+            currentUser = null;
+            __workspaceCache = null;
+            localStorage.removeItem('currentUser');
+            checkAuth();
+            init();
+            return;
+        }
+
         if (res.ok) {
-            currentUser = await res.json();
+            try {
+                currentUser = await res.json();
+            } catch (parseErr) {
+                console.warn('Bootstrap /me parse failed', parseErr);
+                currentUser = null;
+                localStorage.removeItem('currentUser');
+                __workspaceCache = null;
+                checkAuth();
+                init();
+                return;
+            }
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
             try {
                 await apiPullWorkspace();
@@ -9780,10 +9917,8 @@ async function bootstrapApp() {
             localStorage.removeItem('currentUser');
             __workspaceCache = null;
         }
-    } catch (e) {
-        console.warn('API bootstrap failed', e);
-        currentUser = null;
-        __workspaceCache = null;
+    } finally {
+        document.body.classList.remove('app-bootstrapping');
     }
     checkAuth();
     init();
