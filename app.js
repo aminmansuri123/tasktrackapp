@@ -1,4 +1,4 @@
-const APP_VERSION = '12.1.0';
+const APP_VERSION = '12.1.1';
 
 let __loginErrorDismissTimer = null;
 
@@ -86,8 +86,15 @@ async function apiFetch(path, options = {}) {
 
 async function apiPullWorkspace() {
     const res = await apiFetch('/api/workspace');
-    if (!res.ok) throw new Error('Failed to load workspace');
+    if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        console.error('GET /workspace failed:', res.status, errText);
+        throw new Error('Failed to load workspace');
+    }
     const body = await res.json();
+    if (body._debug) {
+        console.log('[workspace _debug]', JSON.stringify(body._debug));
+    }
     __workspaceCache = normalizeData(body);
 }
 

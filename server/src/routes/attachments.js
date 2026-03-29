@@ -17,12 +17,9 @@ function tenantAttachmentKey(req) {
   if (req.user.isMaster) {
     return 'master';
   }
-  const w = req.user.workspaceTenantRoot;
-  if (w != null && w !== '' && !Number.isNaN(Number(w))) {
-    return Number(w);
-  }
-  if (req.user.tenantRootUserId != null && !Number.isNaN(Number(req.user.tenantRootUserId))) {
-    return Number(req.user.tenantRootUserId);
+  const tr = req.user.tenantRootUserId;
+  if (tr != null && !Number.isNaN(Number(tr))) {
+    return Number(tr);
   }
   return req.user.userId;
 }

@@ -15,41 +15,84 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '12.1.0';
+const EXPORT_VERSION = '12.1.1';
 
+/**
+ * Determine workspace tenant root for the current request.
+ * For org-owner admins: tenantRootUserId === userId → use it.
+ * For delegated admins: tenantRootUserId !== userId → use tenantRootUserId.
+ * For regular users: use tenantRootUserId.
+ * Fallback: use userId.
+ */
 function resolveTenantRoot(req) {
   if (req.user.isMaster) return null;
-  const w = req.user.workspaceTenantRoot;
-  if (w != null && w !== '' && !Number.isNaN(Number(w))) {
-    return Number(w);
-  }
   const tr = req.user.tenantRootUserId;
-  if (tr != null && tr !== '' && !Number.isNaN(Number(tr))) {
+  if (tr != null && !Number.isNaN(Number(tr))) {
     return Number(tr);
   }
-  const uid = req.user.userId;
-  return uid != null && !Number.isNaN(Number(uid)) ? Number(uid) : uid;
+  return Number(req.user.userId);
 }
 
-async function ensureUserInList(usersList, userId) {
-  if (!userId) return usersList;
-  const id = Number(userId);
-  if (Number.isNaN(id)) return usersList;
-  if (usersList.some((u) => Number(u.id) === id)) return usersList;
-  const doc = await User.findOne({ userId: id }).lean();
-  if (!doc || doc.isMaster) return usersList;
-  return [
-    ...usersList,
-    {
-      id: doc.userId,
-      email: doc.email,
-      name: doc.name,
-      role: doc.role,
-      is_active: doc.isActive,
-      isMaster: doc.isMaster,
-    },
-  ];
+async function loadTenantUsers(tenantRoot, currentUserId) {
+  let users = [];
+  try {
+    users = await usersToClientShapeForTenant(tenantRoot);
+  } catch (e) {
+    console.error('loadTenantUsers: usersToClientShapeForTenant failed:', e.message);
+  }
+
+  const uid = Number(currentUserId);
+  if (!Number.isNaN(uid) && !users.some((u) => Number(u.id) === uid)) {
+    try {
+      const doc = await User.findOne({ userId: uid }).lean();
+      if (doc && !doc.isMaster) {
+        users.push({
+          id: doc.userId,
+          email: doc.email,
+          name: doc.name,
+          role: doc.role,
+          is_active: doc.isActive,
+          isMaster: doc.isMaster,
+        });
+      }
+    } catch (e) {
+      console.error('loadTenantUsers: fallback user lookup failed:', e.message);
+    }
+  }
+  return users;
 }
+
+router.get('/debug-tenant', authMiddleware, async (req, res) => {
+  try {
+    const tenantRoot = resolveTenantRoot(req);
+    const uid = req.user.userId;
+
+    const adminDoc = await User.findOne({ userId: uid }).lean();
+    const wsDoc = await Workspace.findOne({ tenantRootUserId: tenantRoot }).lean();
+    const allTenantUsers = await User.find({
+      isMaster: { $ne: true },
+      $or: [{ tenantRootUserId: tenantRoot }, { userId: tenantRoot }],
+    }).lean();
+
+    const allWorkspaces = await Workspace.find().select('tenantRootUserId').lean();
+
+    return res.json({
+      resolvedTenantRoot: tenantRoot,
+      reqUser: req.user,
+      adminDoc: adminDoc
+        ? { userId: adminDoc.userId, email: adminDoc.email, role: adminDoc.role, tenantRootUserId: adminDoc.tenantRootUserId, isMaster: adminDoc.isMaster, isActive: adminDoc.isActive }
+        : null,
+      workspaceExists: !!wsDoc,
+      workspaceTenantRootUserId: wsDoc ? wsDoc.tenantRootUserId : null,
+      workspaceDataUsersCount: wsDoc && wsDoc.data ? (wsDoc.data.users || []).length : 0,
+      tenantUsersFromDb: allTenantUsers.map((u) => ({ userId: u.userId, email: u.email, tenantRootUserId: u.tenantRootUserId, role: u.role })),
+      allWorkspaceTenantRoots: allWorkspaces.map((w) => w.tenantRootUserId),
+    });
+  } catch (e) {
+    console.error('debug-tenant error:', e);
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 router.get('/backup', authMiddleware, async (req, res) => {
   try {
@@ -65,7 +108,7 @@ router.get('/backup', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'No workspace' });
     }
     const normalized = normalizeWorkspacePayload(ws.data);
-    normalized.users = await usersToClientShapeForTenant(tenantRoot);
+    normalized.users = await loadTenantUsers(tenantRoot, req.user.userId);
     return res.json({
       version: EXPORT_VERSION,
       exportDate: new Date().toISOString(),
@@ -109,12 +152,16 @@ router.post('/restore', authMiddleware, async (req, res) => {
     ws.data = complete;
     ws.markModified('data');
     await ws.save();
-    await syncUsersFromClientPayload(complete.users, { isAdmin: true, tenantRootUserId: tenantRoot });
-    if (Array.isArray(complete.users) && complete.users.length > 0) {
-      await deleteUsersNotInPayload(complete.users.map((u) => u.id), tenantRoot, null, true);
+    try {
+      await syncUsersFromClientPayload(complete.users, { isAdmin: true, tenantRootUserId: tenantRoot });
+      if (Array.isArray(complete.users) && complete.users.length > 0) {
+        await deleteUsersNotInPayload(complete.users.map((u) => u.id), tenantRoot, null, true);
+      }
+    } catch (syncErr) {
+      console.error('Restore: user sync error:', syncErr.message);
     }
     const normalized = normalizeWorkspacePayload(ws.data);
-    normalized.users = await usersToClientShapeForTenant(tenantRoot);
+    normalized.users = await loadTenantUsers(tenantRoot, req.user.userId);
     return res.json(normalized);
   } catch (e) {
     console.error(e);
@@ -131,14 +178,17 @@ router.get('/', authMiddleware, async (req, res) => {
     }
 
     const tenantRoot = resolveTenantRoot(req);
+    console.log(`GET /workspace uid=${req.user.userId} tenantRoot=${tenantRoot}`);
+
     const ws = await ensureWorkspaceForTenantRoot(tenantRoot);
     if (!ws) {
+      console.error('GET /workspace: ensureWorkspaceForTenantRoot returned null for', tenantRoot);
       return res.status(500).json({ error: 'Failed to load workspace' });
     }
 
     const normalized = normalizeWorkspacePayload(ws.data);
-    let users = await usersToClientShapeForTenant(tenantRoot);
-    users = await ensureUserInList(users, req.user.userId);
+    const users = await loadTenantUsers(tenantRoot, req.user.userId);
+    console.log(`GET /workspace uid=${req.user.userId} tenantRoot=${tenantRoot} users=${users.length}`);
     normalized.users = users;
 
     try {
@@ -146,12 +196,21 @@ router.get('/', authMiddleware, async (req, res) => {
       ws.markModified('data');
       await ws.save();
     } catch (saveErr) {
-      console.error('GET /workspace: could not persist user roster into ws.data:', saveErr.message);
+      console.error('GET /workspace: could not persist into ws.data:', saveErr.message);
     }
+
+    normalized._debug = {
+      tenantRoot,
+      reqUserId: req.user.userId,
+      reqTenantRootUserId: req.user.tenantRootUserId,
+      usersReturned: users.length,
+      userIds: users.map((u) => u.id),
+      wsDocTenantRoot: ws.tenantRootUserId,
+    };
 
     return res.json(normalized);
   } catch (e) {
-    console.error(e);
+    console.error('GET /workspace CRASH:', e);
     return res.status(500).json({ error: 'Failed to load workspace' });
   }
 });
@@ -168,6 +227,7 @@ router.put('/', authMiddleware, async (req, res) => {
     }
     const isAdmin = doc.role === 'admin';
     const tenantRoot = resolveTenantRoot(req);
+    console.log(`PUT /workspace uid=${req.user.userId} tenantRoot=${tenantRoot} isAdmin=${isAdmin}`);
 
     const ws = await ensureWorkspaceForTenantRoot(tenantRoot);
     if (!ws) {
@@ -180,7 +240,7 @@ router.put('/', authMiddleware, async (req, res) => {
     const merged = { ...incoming };
 
     if (!isAdmin) {
-      merged.users = await usersToClientShapeForTenant(tenantRoot);
+      merged.users = await loadTenantUsers(tenantRoot, req.user.userId);
       merged.locations = existingNormalized.locations;
       merged.segregationTypes = existingNormalized.segregationTypes;
       merged.holidays = existingNormalized.holidays;
@@ -202,22 +262,29 @@ router.put('/', authMiddleware, async (req, res) => {
           );
         }
       } catch (syncErr) {
-        console.error('PUT /workspace: user sync error (workspace data will still be saved):', syncErr);
+        console.error('PUT /workspace: user sync error (workspace will still save):', syncErr);
       }
     }
 
-    let users = await usersToClientShapeForTenant(tenantRoot);
-    users = await ensureUserInList(users, req.user.userId);
+    const users = await loadTenantUsers(tenantRoot, req.user.userId);
+    console.log(`PUT /workspace uid=${req.user.userId} tenantRoot=${tenantRoot} users=${users.length}`);
     merged.users = users;
 
     ws.data = merged;
     ws.markModified('data');
     await ws.save();
 
+    merged._debug = {
+      tenantRoot,
+      reqUserId: req.user.userId,
+      usersReturned: users.length,
+      userIds: users.map((u) => u.id),
+    };
+
     return res.json(merged);
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Failed to save workspace' });
+    console.error('PUT /workspace CRASH:', e);
+    return res.status(500).json({ error: 'Failed to save workspace', detail: e.message });
   }
 });
 
