@@ -1,9 +1,71 @@
 const dns = require('dns');
 const nodemailer = require('nodemailer');
-const { SMTP_EMAIL, SMTP_PASSWORD, SMTP_HOST, SMTP_PORT, SMTP_CONFIGURED } = require('../config');
+const {
+  SMTP_EMAIL,
+  SMTP_PASSWORD,
+  SMTP_HOST,
+  SMTP_PORT,
+  SMTP_CONFIGURED,
+  RESEND_API_KEY,
+  EMAIL_FROM,
+  EMAIL_CONFIGURED,
+} = require('../config');
 
 function isEmailEnabled() {
-  return SMTP_CONFIGURED;
+  return EMAIL_CONFIGURED;
+}
+
+function resendFromHeader() {
+  if (EMAIL_FROM) return EMAIL_FROM;
+  return 'Task Tracker <onboarding@resend.dev>';
+}
+
+async function sendMailResend(toEmail, subject, html) {
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: resendFromHeader(),
+      to: [toEmail],
+      subject,
+      html,
+    }),
+  });
+  const bodyText = await res.text();
+  if (!res.ok) {
+    throw new Error(`Resend API ${res.status}: ${bodyText.slice(0, 500)}`);
+  }
+}
+
+async function sendMailSmtp(toEmail, subject, html) {
+  const transporter = await getTransporter();
+  if (!transporter) throw new Error('SMTP transporter unavailable');
+  await transporter.sendMail({
+    from: `"Task Tracker" <${SMTP_EMAIL}>`,
+    to: toEmail,
+    subject,
+    html,
+  });
+}
+
+let _loggedTransport = false;
+async function sendMail(toEmail, subject, html) {
+  if (RESEND_API_KEY) {
+    if (!_loggedTransport) {
+      console.log('[email] Sending via Resend API (HTTPS)');
+      _loggedTransport = true;
+    }
+    await sendMailResend(toEmail, subject, html);
+    return;
+  }
+  if (!_loggedTransport) {
+    console.log('[email] Sending via SMTP');
+    _loggedTransport = true;
+  }
+  await sendMailSmtp(toEmail, subject, html);
 }
 
 let _transporter = null;
@@ -113,8 +175,6 @@ function buildReminderHtml(userName, overdueTasks, upcomingTasks) {
 
 async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTasks) {
   if (!isEmailEnabled()) return false;
-  const transporter = await getTransporter();
-  if (!transporter) return false;
 
   const total = overdueTasks.length + upcomingTasks.length;
   const subject = total === 1
@@ -122,12 +182,7 @@ async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTa
     : `Task Reminder: ${total} tasks need attention`;
 
   try {
-    await transporter.sendMail({
-      from: `"Task Tracker" <${SMTP_EMAIL}>`,
-      to: toEmail,
-      subject,
-      html: buildReminderHtml(userName, overdueTasks, upcomingTasks),
-    });
+    await sendMail(toEmail, subject, buildReminderHtml(userName, overdueTasks, upcomingTasks));
     return true;
   } catch (err) {
     console.error(`Email send failed for ${toEmail}:`, err.message);
@@ -166,20 +221,13 @@ function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isS
 
 async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate, assignerName, isSelf) {
   if (!isEmailEnabled()) return false;
-  const transporter = await getTransporter();
-  if (!transporter) return false;
 
   const subject = isSelf
     ? `New Task: ${taskTitle || '(untitled)'}`
     : `Task Assigned: ${taskTitle || '(untitled)'}`;
 
   try {
-    await transporter.sendMail({
-      from: `"Task Tracker" <${SMTP_EMAIL}>`,
-      to: toEmail,
-      subject,
-      html: buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf),
-    });
+    await sendMail(toEmail, subject, buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf));
     return true;
   } catch (err) {
     console.error(`Assignment email failed for ${toEmail}:`, err.message);
@@ -188,20 +236,15 @@ async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate
 }
 
 async function sendTestEmail(toEmail, userName) {
-  if (!isEmailEnabled()) throw new Error('SMTP not configured');
-  const transporter = await getTransporter();
-  if (!transporter) throw new Error('Could not create email transporter');
+  if (!isEmailEnabled()) {
+    throw new Error('Email not configured. Set RESEND_API_KEY (recommended on Render) or SMTP_EMAIL + SMTP_PASSWORD.');
+  }
   const demoTask = {
     title: 'Sample Task — Test Reminder',
     due_date: new Date().toISOString().split('T')[0],
     status: 'in_progress',
   };
-  await transporter.sendMail({
-    from: `"Task Tracker" <${SMTP_EMAIL}>`,
-    to: toEmail,
-    subject: 'Test Email — Task Tracker Reminder',
-    html: buildReminderHtml(userName, [], [demoTask]),
-  });
+  await sendMail(toEmail, 'Test Email — Task Tracker Reminder', buildReminderHtml(userName, [], [demoTask]));
   return true;
 }
 

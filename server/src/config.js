@@ -21,6 +21,11 @@ const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
 const REMINDER_CRON = process.env.REMINDER_CRON || '0 8 * * *';
 const SMTP_CONFIGURED = !!(SMTP_EMAIL && SMTP_PASSWORD);
+/** Resend API (HTTPS :443) — works on Render where outbound SMTP is often blocked. */
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+/** Verified sender for Resend, e.g. Task Tracker <noreply@yourdomain.com> or onboarding@resend.dev for tests */
+const EMAIL_FROM = (process.env.EMAIL_FROM || '').trim();
+const EMAIL_CONFIGURED = !!(RESEND_API_KEY || SMTP_CONFIGURED);
 
 module.exports = {
   PORT,
@@ -37,4 +42,7 @@ module.exports = {
   SMTP_PORT,
   REMINDER_CRON,
   SMTP_CONFIGURED,
+  RESEND_API_KEY,
+  EMAIL_FROM,
+  EMAIL_CONFIGURED,
 };

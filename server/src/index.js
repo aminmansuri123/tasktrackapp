@@ -6,7 +6,16 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 
-const { PORT, MONGODB_URI, MASTER_EMAIL, MASTER_PASSWORD, parseOrigins, isProduction } = require('./config');
+const {
+  PORT,
+  MONGODB_URI,
+  MASTER_EMAIL,
+  MASTER_PASSWORD,
+  parseOrigins,
+  isProduction,
+  SMTP_CONFIGURED,
+  RESEND_API_KEY,
+} = require('./config');
 const User = require('./models/User');
 const Workspace = require('./models/Workspace');
 const bcrypt = require('bcryptjs');
@@ -118,6 +127,11 @@ async function main() {
 
   await mongoose.connect(MONGODB_URI);
   console.log('MongoDB connected');
+  if (process.env.RENDER === 'true' && SMTP_CONFIGURED && !RESEND_API_KEY) {
+    console.warn(
+      '[email] Render blocks outbound SMTP (ports 587/465). Task emails will time out. Set RESEND_API_KEY (+ EMAIL_FROM) — see server/.env.example.'
+    );
+  }
   await dropStaleLegacyIndexes();
   await ensureMasterUser();
   await migrateLegacyTenants();

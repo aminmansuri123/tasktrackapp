@@ -6,7 +6,7 @@ const { authMiddleware } = require('../middleware/auth');
 const { defaultWorkspaceData, normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const { isEmailEnabled, sendTestEmail, sendTaskAssignmentEmail } = require('../services/emailService');
-const { SMTP_CONFIGURED } = require('../config');
+const { EMAIL_CONFIGURED } = require('../config');
 const {
   syncUsersFromClientPayload,
   deleteUsersNotInPayload,
@@ -18,7 +18,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '15.3.0';
+const EXPORT_VERSION = '15.4.0';
 
 /**
  * Determine workspace tenant root for the current request.
@@ -378,7 +378,7 @@ router.patch('/shared-task', authMiddleware, async (req, res) => {
 // ── Reminder preference endpoints (only functional when SMTP is configured) ──
 
 router.get('/reminder-prefs', authMiddleware, async (req, res) => {
-  if (!SMTP_CONFIGURED) return res.json({ enabled: false });
+  if (!EMAIL_CONFIGURED) return res.json({ enabled: false });
   try {
     const pref = await ReminderPreference.findOne({ userId: req.user.userId }).lean();
     return res.json({
@@ -396,7 +396,7 @@ router.get('/reminder-prefs', authMiddleware, async (req, res) => {
 });
 
 router.put('/reminder-prefs', authMiddleware, async (req, res) => {
-  if (!SMTP_CONFIGURED) return res.json({ enabled: false });
+  if (!EMAIL_CONFIGURED) return res.json({ enabled: false });
   try {
     const { beforeDueDate, afterDueDate, notifyOnAssign, notifyOnSelfAssign } = req.body || {};
     const existing = await ReminderPreference.findOne({ userId: req.user.userId });
@@ -422,7 +422,7 @@ router.put('/reminder-prefs', authMiddleware, async (req, res) => {
 });
 
 router.put('/reminder-prefs/:userId', authMiddleware, async (req, res) => {
-  if (!SMTP_CONFIGURED) return res.json({ enabled: false });
+  if (!EMAIL_CONFIGURED) return res.json({ enabled: false });
   if (req.user.role !== 'admin' && !req.user.isMaster) {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -449,7 +449,7 @@ router.put('/reminder-prefs/:userId', authMiddleware, async (req, res) => {
 });
 
 router.get('/reminder-prefs/org-users', authMiddleware, async (req, res) => {
-  if (!SMTP_CONFIGURED) return res.json({ enabled: false, users: [] });
+  if (!EMAIL_CONFIGURED) return res.json({ enabled: false, users: [] });
   if (req.user.role !== 'admin' && !req.user.isMaster) {
     return res.status(403).json({ error: 'Admin only' });
   }
@@ -486,7 +486,7 @@ router.get('/reminder-prefs/org-users', authMiddleware, async (req, res) => {
 });
 
 router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
-  if (!SMTP_CONFIGURED) return res.json({ ok: true, skipped: true });
+  if (!EMAIL_CONFIGURED) return res.json({ ok: true, skipped: true });
   try {
     const { assignedToUserId, taskTitle, dueDate, isSelf } = req.body || {};
     const assigneeId = parseInt(String(assignedToUserId), 10);
@@ -521,7 +521,11 @@ router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
 });
 
 router.post('/send-test-reminder', authMiddleware, async (req, res) => {
-  if (!SMTP_CONFIGURED) return res.status(400).json({ error: 'Email not configured on server. Set SMTP_EMAIL and SMTP_PASSWORD environment variables.' });
+  if (!EMAIL_CONFIGURED) {
+    return res.status(400).json({
+      error: 'Email not configured. On Render, outbound SMTP is blocked — set RESEND_API_KEY and EMAIL_FROM (see server .env.example). Else set SMTP_EMAIL and SMTP_PASSWORD for SMTP.',
+    });
+  }
   try {
     const user = await User.findOne({ userId: req.user.userId }).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });

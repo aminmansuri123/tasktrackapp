@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { signToken, authMiddleware, resolveAuthDecoded } = require('../middleware/auth');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
-const { isProduction, SMTP_CONFIGURED } = require('../config');
+const { isProduction, EMAIL_CONFIGURED } = require('../config');
 const { usersToClientShapeAll, usersToClientShapeForTenant } = require('../services/userSync');
 const { assertRegistrationAllowed, getSiteSettings } = require('../services/registrationPolicy');
 const { allocateUniqueUserId } = require('../services/userSync');
@@ -222,7 +222,7 @@ router.post('/login', async (req, res) => {
       isMaster: doc.isMaster,
     });
     res.cookie('auth_token', token, cookieOptions());
-    return res.json({ user: publicUser(doc), token, smtpConfigured: SMTP_CONFIGURED });
+    return res.json({ user: publicUser(doc), token, smtpConfigured: EMAIL_CONFIGURED });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Login failed' });
@@ -266,7 +266,7 @@ router.get('/me', async (req, res) => {
   if (!doc || !doc.isActive) {
     return res.status(401).json({ error: 'Invalid session' });
   }
-  return res.json({ ...publicUser(doc), smtpConfigured: SMTP_CONFIGURED });
+  return res.json({ ...publicUser(doc), smtpConfigured: EMAIL_CONFIGURED });
 });
 
 router.get('/users-for-master', async (req, res) => {
