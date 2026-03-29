@@ -15,7 +15,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '15.0.0';
+const EXPORT_VERSION = '15.1.0';
 
 /**
  * Determine workspace tenant root for the current request.
@@ -61,6 +61,40 @@ async function loadTenantUsers(tenantRoot, currentUserId) {
     }
   }
   return users;
+}
+
+async function loadSharedTasks(userId) {
+  try {
+    const userDoc = await User.findOne({ userId }).lean();
+    if (!userDoc || !Array.isArray(userDoc.sharedWithTenants) || userDoc.sharedWithTenants.length === 0) {
+      return [];
+    }
+    const sharedTasks = [];
+    for (const tenantId of userDoc.sharedWithTenants) {
+      const ws = await Workspace.findOne({ tenantRootUserId: tenantId }).lean();
+      if (!ws || !ws.data || !Array.isArray(ws.data.tasks)) continue;
+      const admin = await User.findOne({
+        $or: [{ userId: tenantId }, { tenantRootUserId: tenantId, role: 'admin' }],
+        isMaster: { $ne: true },
+      }).lean();
+      const adminName = admin ? (admin.name || admin.email) : `Org ${tenantId}`;
+      const tasksForUser = ws.data.tasks.filter(
+        (t) => Number(t.assigned_to) === userId
+      );
+      for (const t of tasksForUser) {
+        sharedTasks.push({
+          ...t,
+          _sharedTask: true,
+          _sourceWorkspace: tenantId,
+          _assignedByAdmin: adminName,
+        });
+      }
+    }
+    return sharedTasks;
+  } catch (e) {
+    console.error('loadSharedTasks error:', e.message);
+    return [];
+  }
 }
 
 router.get('/debug-tenant', authMiddleware, async (req, res) => {
@@ -192,22 +226,37 @@ router.get('/', authMiddleware, async (req, res) => {
     console.log(`GET /workspace uid=${req.user.userId} tenantRoot=${tenantRoot} users=${users.length}`);
     normalized.users = users;
 
+    const isAdmin = req.user.role === 'admin';
+    if (!isAdmin) {
+      const adminDoc = await User.findOne({
+        $or: [{ userId: tenantRoot }, { tenantRootUserId: tenantRoot, role: 'admin' }],
+        isMaster: { $ne: true },
+      }).lean();
+      const primaryAdminName = adminDoc ? (adminDoc.name || adminDoc.email) : '';
+      if (Array.isArray(normalized.tasks)) {
+        normalized.tasks = normalized.tasks.map((t) => ({
+          ...t,
+          _assignedByAdmin: primaryAdminName,
+          _sourceWorkspace: tenantRoot,
+        }));
+      }
+      const shared = await loadSharedTasks(req.user.userId);
+      if (shared.length > 0) {
+        normalized.tasks = [...(normalized.tasks || []), ...shared];
+      }
+    }
+
     try {
-      ws.data = normalized;
+      const dataToSave = { ...normalized };
+      if (Array.isArray(dataToSave.tasks)) {
+        dataToSave.tasks = dataToSave.tasks.filter((t) => !t._sharedTask);
+      }
+      ws.data = dataToSave;
       ws.markModified('data');
       await ws.save();
     } catch (saveErr) {
       console.error('GET /workspace: could not persist into ws.data:', saveErr.message);
     }
-
-    normalized._debug = {
-      tenantRoot,
-      reqUserId: req.user.userId,
-      reqTenantRootUserId: req.user.tenantRootUserId,
-      usersReturned: users.length,
-      userIds: users.map((u) => u.id),
-      wsDocTenantRoot: ws.tenantRootUserId,
-    };
 
     return res.json(normalized);
   } catch (e) {
@@ -237,6 +286,9 @@ router.put('/', authMiddleware, async (req, res) => {
 
     const existingNormalized = normalizeWorkspacePayload(ws.data);
     const incoming = normalizeWorkspacePayload(req.body);
+    if (Array.isArray(incoming.tasks)) {
+      incoming.tasks = incoming.tasks.filter((t) => !t._sharedTask);
+    }
 
     const merged = { ...incoming };
 
@@ -286,6 +338,37 @@ router.put('/', authMiddleware, async (req, res) => {
   } catch (e) {
     console.error('PUT /workspace CRASH:', e);
     return res.status(500).json({ error: 'Failed to save workspace', detail: e.message });
+  }
+});
+
+router.patch('/shared-task', authMiddleware, async (req, res) => {
+  try {
+    const { sourceWorkspace, taskId, updates } = req.body || {};
+    if (!sourceWorkspace || !taskId || !updates) {
+      return res.status(400).json({ error: 'sourceWorkspace, taskId, and updates required' });
+    }
+    const root = Number(sourceWorkspace);
+    const ws = await Workspace.findOne({ tenantRootUserId: root });
+    if (!ws || !ws.data || !Array.isArray(ws.data.tasks)) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
+    const task = ws.data.tasks.find((t) => String(t.id) === String(taskId));
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    if (Number(task.assigned_to) !== req.user.userId) {
+      return res.status(403).json({ error: 'Not assigned to you' });
+    }
+    const allowed = ['status', 'completion_percentage'];
+    for (const key of allowed) {
+      if (updates[key] !== undefined) task[key] = updates[key];
+    }
+    ws.markModified('data');
+    await ws.save();
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('PATCH /shared-task error:', e);
+    return res.status(500).json({ error: 'Update failed' });
   }
 });
 

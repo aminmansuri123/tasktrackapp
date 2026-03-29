@@ -10,6 +10,8 @@ const { getSiteSettings, sanitizePolicyBody } = require('../services/registratio
 const { allocateUniqueUserId } = require('../services/userSync');
 const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
+const ApprovalRequest = require('../models/ApprovalRequest');
+const { normalizeEmailEntry } = require('../services/registrationPolicy');
 
 const router = express.Router();
 
@@ -412,6 +414,55 @@ router.patch('/users/:userId/features', authMiddleware, requireMaster, async (re
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Feature update failed' });
+  }
+});
+
+router.get('/approval-requests', authMiddleware, requireMaster, async (_req, res) => {
+  try {
+    const list = await ApprovalRequest.find({ status: 'pending' }).sort({ createdAt: -1 }).lean();
+    return res.json(list.map((r) => ({ id: r._id, email: r.email, name: r.name, requestedAt: r.createdAt })));
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load approval requests' });
+  }
+});
+
+router.post('/approval-requests/:id/approve', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const ar = await ApprovalRequest.findById(req.params.id);
+    if (!ar || ar.status !== 'pending') {
+      return res.status(404).json({ error: 'Request not found or already reviewed' });
+    }
+    ar.status = 'approved';
+    ar.reviewedAt = new Date();
+    await ar.save();
+
+    const s = await getSiteSettings();
+    const em = normalizeEmailEntry(ar.email);
+    if (!s.allowedEmails.includes(em)) {
+      s.allowedEmails.push(em);
+      await s.save();
+    }
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Approval failed' });
+  }
+});
+
+router.post('/approval-requests/:id/reject', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const ar = await ApprovalRequest.findById(req.params.id);
+    if (!ar || ar.status !== 'pending') {
+      return res.status(404).json({ error: 'Request not found or already reviewed' });
+    }
+    ar.status = 'rejected';
+    ar.reviewedAt = new Date();
+    await ar.save();
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Rejection failed' });
   }
 });
 

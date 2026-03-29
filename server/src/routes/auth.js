@@ -10,6 +10,7 @@ const { allocateUniqueUserId } = require('../services/userSync');
 const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
+const ApprovalRequest = require('../models/ApprovalRequest');
 
 const router = express.Router();
 
@@ -41,6 +42,30 @@ router.get('/registration-policy', async (_req, res) => {
   } catch (e) {
     console.error(e);
     return res.json({ registrationMode: 'open' });
+  }
+});
+
+router.post('/request-approval', async (req, res) => {
+  try {
+    const { name, email } = req.body || {};
+    const em = String(email || '').toLowerCase().trim();
+    const nm = String(name || '').trim();
+    if (!em || !nm) {
+      return res.status(400).json({ error: 'Name and email required' });
+    }
+    const existing = await ApprovalRequest.findOne({ email: em, status: 'pending' });
+    if (existing) {
+      return res.json({ ok: true, message: 'Approval request already submitted. Please wait for master to review.' });
+    }
+    const already = await User.findOne({ email: em });
+    if (already) {
+      return res.status(400).json({ error: 'This email is already registered. Try signing in.' });
+    }
+    await ApprovalRequest.create({ email: em, name: nm });
+    return res.json({ ok: true, message: 'Approval request submitted. You will be able to register once the master approves your request.' });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Could not submit approval request' });
   }
 });
 
@@ -87,6 +112,9 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Email already registered' });
     }
     const denied = await assertRegistrationAllowed(em);
+    if (denied === 'APPROVAL_REQUIRED') {
+      return res.status(403).json({ error: 'APPROVAL_REQUIRED' });
+    }
     if (denied) {
       return res.status(403).json({ error: denied });
     }

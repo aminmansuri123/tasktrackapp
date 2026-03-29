@@ -1,4 +1,4 @@
-const APP_VERSION = '15.0.0';
+const APP_VERSION = '15.1.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -38,6 +38,9 @@ function buildWorkspacePayloadForPut() {
             const p = __pendingPasswordsByUserId.get(id);
             if (p) u.password = p;
         }
+    }
+    if (Array.isArray(payload.tasks)) {
+        payload.tasks = payload.tasks.filter(t => !t._sharedTask);
     }
     return payload;
 }
@@ -1055,6 +1058,11 @@ async function register() {
                 if (t) {
                     try {
                         const j = JSON.parse(t);
+                        if (j.error === 'APPROVAL_REQUIRED') {
+                            showError('loginError', 'Your email/domain is not on the allowed list. You can request approval from the administrator.');
+                            showApprovalRequestOption(name, email);
+                            return;
+                        }
                         if (j.error) errMsg = j.error;
                     } catch {
                         errMsg = t.slice(0, 200);
@@ -1259,6 +1267,29 @@ function showError(elementId, message) {
         if (elementId === 'loginError') __loginErrorDismissTimer = null;
     }, ms);
     if (elementId === 'loginError') __loginErrorDismissTimer = t;
+}
+
+function showApprovalRequestOption(name, email) {
+    const el = document.getElementById('loginError');
+    if (!el) return;
+    el.innerHTML += `<div style="margin-top:8px;"><button type="button" class="btn btn-primary" style="padding:6px 16px;font-size:13px;" onclick="submitApprovalRequest('${escapeHtml(name)}','${escapeHtml(email)}')">Request approval</button></div>`;
+}
+
+async function submitApprovalRequest(name, email) {
+    try {
+        const res = await apiFetch('/api/auth/request-approval', {
+            method: 'POST',
+            body: JSON.stringify({ name, email }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (res.ok) {
+            showError('loginError', body.message || 'Approval request submitted. Please wait for the administrator to review.');
+        } else {
+            showError('loginError', body.error || 'Could not submit approval request.');
+        }
+    } catch (e) {
+        showError('loginError', 'Network error. Please try again.');
+    }
 }
 
 function clearLoginFormError() {
@@ -4322,6 +4353,10 @@ function openInteractiveTaskPopup(taskId) {
                     <strong style="color: #333;">Assigned To:</strong>
                     <div style="color: #666;">${assignedUser ? assignedUser.name : 'Unknown'}</div>
                 </div>
+                ${task._assignedByAdmin ? `<div>
+                    <strong style="color: #333;">Assigned By:</strong>
+                    <div style="color: #764ba2;">${escapeHtml(task._assignedByAdmin)}${task._sharedTask ? ' <em style="font-size:11px;color:#999;">(shared)</em>' : ''}</div>
+                </div>` : ''}
                 <div>
                     <strong style="color: #333;">Location:</strong>
                     <div style="color: #666;">${location ? location.name : 'Unknown'}</div>
@@ -5722,21 +5757,23 @@ function renderSettings() {
                 }).join('');
             masterSec.innerHTML = `
                 <h3 style="margin-top:0;">Self-service registration</h3>
-                <p style="color:#666;font-size:13px;">Who may use <strong>Create account</strong> on the login screen. If they are not allowed, they see: <em>Creation not allowed</em>.</p>
+                <p style="color:#666;font-size:13px;">Control who may use <strong>Create account</strong>. If neither email nor domain matches, the user can submit an approval request.</p>
                 <div style="display:flex;flex-direction:column;gap:8px;margin:12px 0;">
-                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="masterRegMode" id="masterRegModeOpen" value="open"> Anyone may register</label>
-                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="masterRegMode" id="masterRegModeEmail" value="email_list"> Only specific email addresses (list below)</label>
-                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="masterRegMode" id="masterRegModeDomain" value="domain_list"> Only addresses from specific domains (list below)</label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="masterRegMode" id="masterRegModeOpen" value="open"> Anyone may register (no restrictions)</label>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="radio" name="masterRegMode" id="masterRegModeRestricted" value="restricted"> Restrict to allowed emails <strong>and/or</strong> domains (both checked — if either matches, registration is allowed)</label>
                 </div>
                 <div class="form-group">
-                    <label>Allowed emails (one per line)</label>
+                    <label>Allowed emails (one per line) — checked first</label>
                     <textarea id="masterRegEmails" class="form-control" rows="4" placeholder="user1@company.com&#10;user2@company.com"></textarea>
                 </div>
                 <div class="form-group">
-                    <label>Allowed domains (one per line, e.g. ameyalogistics.com). Subdomains are allowed automatically.</label>
+                    <label>Allowed domains (one per line, e.g. ameyalogistics.com) — checked second. Subdomains allowed automatically.</label>
                     <textarea id="masterRegDomains" class="form-control" rows="3" placeholder="company.com"></textarea>
                 </div>
                 <button type="button" class="btn btn-primary" onclick="saveMasterRegistrationPolicy()">Save registration rules</button>
+                <h3 style="margin-top:24px;">Pending approval requests</h3>
+                <p style="color:#666;font-size:13px;">Users who don't match email/domain rules can request approval. Approving adds their email to the allowed list.</p>
+                <div id="masterApprovalRequestsList" style="margin-top:10px;"><span style="color:#999;">Loading…</span></div>
                 <h3 style="margin-top:24px;">Cross-tenant user management</h3>
                 <p style="color:#666;font-size:13px;">Add account admins or account users, delete accounts, change admin vs user role, or move a user under another account admin.</p>
                 <div class="form-group" style="margin-top:12px;">
@@ -5898,11 +5935,9 @@ async function masterRegistrationPolicyHydrate() {
         if (!res.ok) return;
         const p = await res.json();
         const mode = p.registrationMode || 'open';
-        const rEmail = document.getElementById('masterRegModeEmail');
-        const rDom = document.getElementById('masterRegModeDomain');
+        const rRestricted = document.getElementById('masterRegModeRestricted');
         rOpen.checked = mode === 'open';
-        if (rEmail) rEmail.checked = mode === 'email_list';
-        if (rDom) rDom.checked = mode === 'domain_list';
+        if (rRestricted) rRestricted.checked = mode === 'restricted' || mode === 'email_list' || mode === 'domain_list';
         const te = document.getElementById('masterRegEmails');
         const td = document.getElementById('masterRegDomains');
         if (te && Array.isArray(p.allowedEmails)) te.value = p.allowedEmails.join('\n');
@@ -5910,6 +5945,47 @@ async function masterRegistrationPolicyHydrate() {
     } catch (e) {
         console.error(e);
     }
+    masterLoadApprovalRequests();
+}
+
+async function masterLoadApprovalRequests() {
+    const wrap = document.getElementById('masterApprovalRequestsList');
+    if (!wrap) return;
+    try {
+        const res = await apiFetch('/api/master/approval-requests');
+        if (!res.ok) { wrap.innerHTML = '<span style="color:#c00;">Could not load requests</span>'; return; }
+        const list = await res.json();
+        if (!Array.isArray(list) || list.length === 0) {
+            wrap.innerHTML = '<span style="color:#999;">No pending requests</span>';
+            return;
+        }
+        wrap.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr style="text-align:left;border-bottom:1px solid #ddd;"><th style="padding:6px 10px;">Name</th><th style="padding:6px 10px;">Email</th><th style="padding:6px 10px;">Requested</th><th style="padding:6px 10px;">Action</th></tr></thead><tbody>'
+            + list.map(r => `<tr><td style="padding:6px 10px;">${escapeHtml(r.name)}</td><td style="padding:6px 10px;">${escapeHtml(r.email)}</td><td style="padding:6px 10px;font-size:12px;">${new Date(r.requestedAt).toLocaleString()}</td><td style="padding:6px 10px;"><button class="btn btn-success" style="padding:3px 10px;font-size:12px;margin-right:4px;" onclick="masterApproveRequest('${r.id}')">Approve</button><button class="btn btn-danger" style="padding:3px 10px;font-size:12px;" onclick="masterRejectRequest('${r.id}')">Reject</button></td></tr>`).join('')
+            + '</tbody></table>';
+    } catch (e) {
+        console.error(e);
+        wrap.innerHTML = '<span style="color:#c00;">Error loading requests</span>';
+    }
+}
+
+async function masterApproveRequest(id) {
+    if (!confirm('Approve this request? The email will be added to the allowed list.')) return;
+    try {
+        const res = await apiFetch(`/api/master/approval-requests/${id}/approve`, { method: 'POST' });
+        if (!res.ok) { alert('Approval failed'); return; }
+        alert('Approved. The user can now register.');
+        masterLoadApprovalRequests();
+        void masterRegistrationPolicyHydrate();
+    } catch (e) { alert('Request failed.'); }
+}
+
+async function masterRejectRequest(id) {
+    if (!confirm('Reject this request?')) return;
+    try {
+        const res = await apiFetch(`/api/master/approval-requests/${id}/reject`, { method: 'POST' });
+        if (!res.ok) { alert('Rejection failed'); return; }
+        masterLoadApprovalRequests();
+    } catch (e) { alert('Request failed.'); }
 }
 
 async function saveMasterRegistrationPolicy() {

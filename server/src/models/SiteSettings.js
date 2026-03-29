@@ -4,12 +4,12 @@ const siteSettingsSchema = new mongoose.Schema(
   {
     registrationMode: {
       type: String,
-      enum: ['open', 'email_list', 'domain_list'],
+      enum: ['open', 'restricted', 'email_list', 'domain_list'],
       default: 'open',
     },
-    /** Lowercased emails allowed to self-register when registrationMode is email_list */
+    /** Lowercased emails allowed to self-register */
     allowedEmails: { type: [String], default: [] },
-    /** Lowercased hostnames (no @) allowed when registrationMode is domain_list */
+    /** Lowercased hostnames (no @) allowed */
     allowedDomains: { type: [String], default: [] },
   },
   { timestamps: true }

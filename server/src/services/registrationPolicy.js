@@ -5,13 +5,15 @@ async function getSiteSettings() {
   if (!s) {
     s = await SiteSettings.create({});
   }
+  if (s.registrationMode === 'email_list' || s.registrationMode === 'domain_list') {
+    s.registrationMode = 'restricted';
+    await s.save();
+  }
   return s;
 }
 
 function normalizeEmailEntry(s) {
-  return String(s || '')
-    .toLowerCase()
-    .trim();
+  return String(s || '').toLowerCase().trim();
 }
 
 function normalizeDomainEntry(s) {
@@ -25,7 +27,7 @@ function normalizeDomainEntry(s) {
 }
 
 /**
- * @returns {Promise<string|null>} Error message to send to client, or null if allowed
+ * @returns {Promise<string|null>} null if allowed, 'APPROVAL_REQUIRED' if neither email nor domain match
  */
 async function assertRegistrationAllowed(email) {
   const s = await getSiteSettings();
@@ -33,49 +35,40 @@ async function assertRegistrationAllowed(email) {
 
   const em = normalizeEmailEntry(email);
   if (!em || !em.includes('@')) {
-    return 'Creation not allowed';
+    return 'APPROVAL_REQUIRED';
   }
 
-  if (s.registrationMode === 'email_list') {
-    const allowed = new Set((s.allowedEmails || []).map(normalizeEmailEntry).filter(Boolean));
-    if (!allowed.has(em)) return 'Creation not allowed';
-    return null;
-  }
+  const allowedEmails = new Set((s.allowedEmails || []).map(normalizeEmailEntry).filter(Boolean));
+  if (allowedEmails.has(em)) return null;
 
-  if (s.registrationMode === 'domain_list') {
-    const dom = em.slice(em.indexOf('@') + 1);
-    const domains = (s.allowedDomains || []).map(normalizeDomainEntry).filter(Boolean);
-    const ok = domains.some((d) => {
-      if (!d) return false;
-      if (dom === d) return true;
-      return dom.endsWith(`.${d}`);
-    });
-    if (!ok) return 'Creation not allowed';
-    return null;
-  }
+  const dom = em.slice(em.indexOf('@') + 1);
+  const domains = (s.allowedDomains || []).map(normalizeDomainEntry).filter(Boolean);
+  const domainMatch = domains.some((d) => {
+    if (!d) return false;
+    if (dom === d) return true;
+    return dom.endsWith(`.${d}`);
+  });
+  if (domainMatch) return null;
 
-  return null;
+  if (allowedEmails.size === 0 && domains.length === 0) return null;
+
+  return 'APPROVAL_REQUIRED';
 }
 
 function sanitizePolicyBody(body) {
   const registrationMode = body?.registrationMode;
-  if (!['open', 'email_list', 'domain_list'].includes(registrationMode)) {
-    return { error: 'Invalid registrationMode' };
+  if (!['open', 'restricted'].includes(registrationMode)) {
+    return { error: 'Invalid registrationMode (must be "open" or "restricted")' };
   }
   let allowedEmails = [];
   let allowedDomains = [];
-  if (registrationMode === 'open') {
-    return { registrationMode, allowedEmails, allowedDomains };
-  }
-  if (registrationMode === 'email_list') {
-    const raw = body?.allowedEmails;
-    const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,;]+/) : [];
-    allowedEmails = [...new Set(arr.map(normalizeEmailEntry).filter(Boolean))];
-  }
-  if (registrationMode === 'domain_list') {
-    const raw = body?.allowedDomains;
-    const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,;]+/) : [];
-    allowedDomains = [...new Set(arr.map(normalizeDomainEntry).filter(Boolean))];
+  if (registrationMode === 'restricted') {
+    const rawE = body?.allowedEmails;
+    const arrE = Array.isArray(rawE) ? rawE : typeof rawE === 'string' ? rawE.split(/[\n,;]+/) : [];
+    allowedEmails = [...new Set(arrE.map(normalizeEmailEntry).filter(Boolean))];
+    const rawD = body?.allowedDomains;
+    const arrD = Array.isArray(rawD) ? rawD : typeof rawD === 'string' ? rawD.split(/[\n,;]+/) : [];
+    allowedDomains = [...new Set(arrD.map(normalizeDomainEntry).filter(Boolean))];
   }
   return { registrationMode, allowedEmails, allowedDomains };
 }
