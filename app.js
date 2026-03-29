@@ -1,4 +1,4 @@
-const APP_VERSION = '12.0.10';
+const APP_VERSION = '12.1.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -5059,6 +5059,9 @@ function recalculateExistingTasks() {
 // Process recurring tasks to generate future instances
 function processRecurringTasks() {
     const data = getData();
+    const hasRecurring = (data.tasks || []).some(t => t.task_type === 'recurring');
+    if (!hasRecurring) return;
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = formatDateString(today);
@@ -5066,7 +5069,6 @@ function processRecurringTasks() {
     futureLimit.setMonth(futureLimit.getMonth() + 12); // Generate 12 months ahead
 
     updateData(data => {
-        // First, mark all tasks with recurrence_stopped flag if they should be stopped
         data.tasks.forEach(task => {
             if (task.task_type === 'recurring' && task.recurrence_stopped) {
                 // Remove any future instances that shouldn't exist

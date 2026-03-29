@@ -4,10 +4,12 @@ const User = require('../models/User');
 const { signToken, authMiddleware, resolveAuthDecoded } = require('../middleware/auth');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const { isProduction } = require('../config');
-const { usersToClientShapeAll } = require('../services/userSync');
+const { usersToClientShapeAll, usersToClientShapeForTenant } = require('../services/userSync');
 const { assertRegistrationAllowed, getSiteSettings } = require('../services/registrationPolicy');
 const { allocateUniqueUserId } = require('../services/userSync');
 const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
+const Workspace = require('../models/Workspace');
+const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 
 const router = express.Router();
 
@@ -102,6 +104,18 @@ router.post('/register', async (req, res) => {
         tenantRootUserId: tenantRoot,
       });
       await ensureWorkspaceForTenantRoot(tenantRoot);
+      try {
+        const wsU = await Workspace.findOne({ tenantRootUserId: tenantRoot });
+        if (wsU) {
+          const norm = normalizeWorkspacePayload(wsU.data);
+          norm.users = await usersToClientShapeForTenant(tenantRoot);
+          wsU.data = norm;
+          wsU.markModified('data');
+          await wsU.save();
+        }
+      } catch (seedErr) {
+        console.error('Register: seed ws users (team_user):', seedErr.message);
+      }
     } else {
       doc = await User.create({
         userId,
@@ -114,6 +128,18 @@ router.post('/register', async (req, res) => {
         tenantRootUserId: userId,
       });
       await ensureWorkspaceForTenantRoot(userId);
+      try {
+        const wsA = await Workspace.findOne({ tenantRootUserId: userId });
+        if (wsA) {
+          const norm = normalizeWorkspacePayload(wsA.data);
+          norm.users = await usersToClientShapeForTenant(userId);
+          wsA.data = norm;
+          wsA.markModified('data');
+          await wsA.save();
+        }
+      } catch (seedErr) {
+        console.error('Register: seed ws users (org_admin):', seedErr.message);
+      }
     }
 
     const token = signToken({

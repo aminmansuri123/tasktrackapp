@@ -80,67 +80,54 @@ async function syncUsersFromClientPayload(usersPayload, { isAdmin, tenantRootUse
   }
 
   for (const u of usersPayload) {
-    if (!u || typeof u.email !== 'string') continue;
-    const email = u.email.toLowerCase().trim();
-    const userId = coerceTenantUserId(u.id);
-    if (!email || userId == null) continue;
+    try {
+      if (!u || typeof u.email !== 'string') continue;
+      const email = u.email.toLowerCase().trim();
+      const userId = coerceTenantUserId(u.id);
+      if (!email || userId == null) continue;
 
-    const existing = await User.findOne({ $or: [{ userId }, { email }] });
-    const passwordPlain = typeof u.password === 'string' && u.password.length > 0 ? u.password : null;
+      const existing = await User.findOne({ $or: [{ userId }, { email }] });
+      const passwordPlain = typeof u.password === 'string' && u.password.length > 0 ? u.password : null;
 
-    if (existing) {
-      if (existing.isMaster) continue;
-      const exRoot =
-        existing.tenantRootUserId != null && existing.tenantRootUserId !== ''
-          ? Number(existing.tenantRootUserId)
-          : null;
-      const tRoot = Number(tenantRootUserId);
-      if (
-        exRoot != null &&
-        Number.isFinite(exRoot) &&
-        Number.isFinite(tRoot) &&
-        exRoot !== tRoot
-      ) {
-        continue;
-      }
-      const emailTaken = await User.findOne({ email, userId: { $ne: existing.userId } });
-      if (emailTaken) continue;
+      if (existing) {
+        if (existing.isMaster) continue;
+        const exRoot =
+          existing.tenantRootUserId != null && existing.tenantRootUserId !== ''
+            ? Number(existing.tenantRootUserId)
+            : null;
+        const tRoot = Number(tenantRootUserId);
+        if (
+          exRoot != null &&
+          Number.isFinite(exRoot) &&
+          Number.isFinite(tRoot) &&
+          exRoot !== tRoot
+        ) {
+          continue;
+        }
+        const emailTaken = await User.findOne({ email, userId: { $ne: existing.userId } });
+        if (emailTaken) continue;
 
-      existing.email = email;
-      existing.name = u.name || existing.name;
-      existing.role = u.role === 'admin' ? 'admin' : 'user';
-      existing.isActive = u.is_active !== false;
-      existing.tenantRootUserId = tenantRootUserId;
-      if (existing.email === MASTER_EMAIL) {
-        existing.isMaster = true;
-        existing.role = 'admin';
-      }
-      if (passwordPlain) {
-        existing.passwordHash = await bcrypt.hash(passwordPlain, 12);
-      }
-      await existing.save();
-    } else {
-      if (!passwordPlain) continue;
-      const passwordHash = await bcrypt.hash(passwordPlain, 12);
-      const isMaster = email === MASTER_EMAIL;
-      const assignId = await allocateUniqueUserId(userId);
-      try {
-        await User.create({
-          userId: assignId,
-          email,
-          name: u.name || email,
-          passwordHash,
-          role: isMaster ? 'admin' : u.role === 'admin' ? 'admin' : 'user',
-          isActive: u.is_active !== false,
-          isMaster,
-          tenantRootUserId: isMaster ? null : tenantRootUserId,
-        });
-      } catch (e) {
-        const dupKey = e && e.keyPattern ? Object.keys(e.keyPattern)[0] : '';
-        if (e && e.code === 11000 && dupKey === 'userId') {
-          const retryId = await allocateUniqueUserId(Date.now() + Math.floor(Math.random() * 1e6));
+        existing.email = email;
+        existing.name = u.name || existing.name;
+        existing.role = u.role === 'admin' ? 'admin' : 'user';
+        existing.isActive = u.is_active !== false;
+        existing.tenantRootUserId = tenantRootUserId;
+        if (existing.email === MASTER_EMAIL) {
+          existing.isMaster = true;
+          existing.role = 'admin';
+        }
+        if (passwordPlain) {
+          existing.passwordHash = await bcrypt.hash(passwordPlain, 12);
+        }
+        await existing.save();
+      } else {
+        if (!passwordPlain) continue;
+        const passwordHash = await bcrypt.hash(passwordPlain, 12);
+        const isMaster = email === MASTER_EMAIL;
+        const assignId = await allocateUniqueUserId(userId);
+        try {
           await User.create({
-            userId: retryId,
+            userId: assignId,
             email,
             name: u.name || email,
             passwordHash,
@@ -149,10 +136,31 @@ async function syncUsersFromClientPayload(usersPayload, { isAdmin, tenantRootUse
             isMaster,
             tenantRootUserId: isMaster ? null : tenantRootUserId,
           });
-        } else {
-          throw e;
+        } catch (createErr) {
+          if (createErr && createErr.code === 11000) {
+            const dupKey = createErr.keyPattern ? Object.keys(createErr.keyPattern)[0] : '';
+            if (dupKey === 'userId') {
+              const retryId = await allocateUniqueUserId(Date.now() + Math.floor(Math.random() * 1e6));
+              await User.create({
+                userId: retryId,
+                email,
+                name: u.name || email,
+                passwordHash,
+                role: isMaster ? 'admin' : u.role === 'admin' ? 'admin' : 'user',
+                isActive: u.is_active !== false,
+                isMaster,
+                tenantRootUserId: isMaster ? null : tenantRootUserId,
+              });
+            } else {
+              console.error(`syncUsers: duplicate key (${dupKey}) for ${email}, skipping`, createErr.message);
+            }
+          } else {
+            throw createErr;
+          }
         }
       }
+    } catch (perUserErr) {
+      console.error('syncUsers: error processing user', u && u.email, perUserErr.message || perUserErr);
     }
   }
 }

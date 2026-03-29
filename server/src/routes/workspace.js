@@ -15,7 +15,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '12.0.10';
+const EXPORT_VERSION = '12.1.0';
 
 function resolveTenantRoot(req) {
   if (req.user.isMaster) return null;
@@ -29,6 +29,26 @@ function resolveTenantRoot(req) {
   }
   const uid = req.user.userId;
   return uid != null && !Number.isNaN(Number(uid)) ? Number(uid) : uid;
+}
+
+async function ensureUserInList(usersList, userId) {
+  if (!userId) return usersList;
+  const id = Number(userId);
+  if (Number.isNaN(id)) return usersList;
+  if (usersList.some((u) => Number(u.id) === id)) return usersList;
+  const doc = await User.findOne({ userId: id }).lean();
+  if (!doc || doc.isMaster) return usersList;
+  return [
+    ...usersList,
+    {
+      id: doc.userId,
+      email: doc.email,
+      name: doc.name,
+      role: doc.role,
+      is_active: doc.isActive,
+      isMaster: doc.isMaster,
+    },
+  ];
 }
 
 router.get('/backup', authMiddleware, async (req, res) => {
@@ -117,7 +137,18 @@ router.get('/', authMiddleware, async (req, res) => {
     }
 
     const normalized = normalizeWorkspacePayload(ws.data);
-    normalized.users = await usersToClientShapeForTenant(tenantRoot);
+    let users = await usersToClientShapeForTenant(tenantRoot);
+    users = await ensureUserInList(users, req.user.userId);
+    normalized.users = users;
+
+    try {
+      ws.data = normalized;
+      ws.markModified('data');
+      await ws.save();
+    } catch (saveErr) {
+      console.error('GET /workspace: could not persist user roster into ws.data:', saveErr.message);
+    }
+
     return res.json(normalized);
   } catch (e) {
     console.error(e);
@@ -154,24 +185,30 @@ router.put('/', authMiddleware, async (req, res) => {
       merged.segregationTypes = existingNormalized.segregationTypes;
       merged.holidays = existingNormalized.holidays;
     } else {
-      const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
-      const incomingUsersMerged = await mergeIncomingUsersWithDbTenantRoster(
-        incoming.users,
-        tenantRoot,
-        previousUserIds
-      );
-      await syncUsersFromClientPayload(incomingUsersMerged, { isAdmin: true, tenantRootUserId: tenantRoot });
-      if (Array.isArray(incomingUsersMerged) && incomingUsersMerged.length > 0) {
-        await deleteUsersNotInPayload(
-          incomingUsersMerged.map((u) => u.id),
+      try {
+        const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
+        const incomingUsersMerged = await mergeIncomingUsersWithDbTenantRoster(
+          incoming.users,
           tenantRoot,
-          previousUserIds,
-          false
+          previousUserIds
         );
+        await syncUsersFromClientPayload(incomingUsersMerged, { isAdmin: true, tenantRootUserId: tenantRoot });
+        if (Array.isArray(incomingUsersMerged) && incomingUsersMerged.length > 0) {
+          await deleteUsersNotInPayload(
+            incomingUsersMerged.map((u) => u.id),
+            tenantRoot,
+            previousUserIds,
+            false
+          );
+        }
+      } catch (syncErr) {
+        console.error('PUT /workspace: user sync error (workspace data will still be saved):', syncErr);
       }
     }
 
-    merged.users = await usersToClientShapeForTenant(tenantRoot);
+    let users = await usersToClientShapeForTenant(tenantRoot);
+    users = await ensureUserInList(users, req.user.userId);
+    merged.users = users;
 
     ws.data = merged;
     ws.markModified('data');

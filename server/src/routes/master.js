@@ -74,6 +74,7 @@ router.post('/users', authMiddleware, requireMaster, async (req, res) => {
         tenantRootUserId: tenantRoot,
       });
       await ensureWorkspaceForTenantRoot(tenantRoot);
+      await reconcileWorkspaceEmbeddedUsersForTenant(tenantRoot);
       return res.status(201).json({ ok: true, user: masterUserSummary(doc) });
     }
 
@@ -88,6 +89,7 @@ router.post('/users', authMiddleware, requireMaster, async (req, res) => {
       tenantRootUserId: userId,
     });
     await ensureWorkspaceForTenantRoot(userId);
+    await reconcileWorkspaceEmbeddedUsersForTenant(userId);
     return res.status(201).json({ ok: true, user: masterUserSummary(doc) });
   } catch (e) {
     console.error(e);
