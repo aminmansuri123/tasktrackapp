@@ -24,4 +24,38 @@ async function resolveTenantRootFromAdminPicker(pickerUserId) {
   return tenantRootFromUserDoc(u);
 }
 
-module.exports = { tenantRootFromUserDoc, resolveTenantRootFromAdminPicker };
+/**
+ * Workspace / GridFS tenant key for the signed-in user. Fixes org admins whose User row has a
+ * stale or wrong tenantRootUserId while team members still point at this admin's userId.
+ * Delegated admins (userId !== tenantRootUserId, members use the org root id) are unchanged.
+ */
+async function resolveWorkspaceTenantRootUserId(doc) {
+  if (!doc || doc.isMaster) return null;
+  if (doc.role !== 'admin') {
+    return tenantRootFromUserDoc(doc);
+  }
+  const selfId = Number(doc.userId);
+  if (!Number.isFinite(selfId)) {
+    return tenantRootFromUserDoc(doc);
+  }
+  const trRaw = doc.tenantRootUserId;
+  const tr =
+    trRaw != null && trRaw !== '' && !Number.isNaN(Number(trRaw)) ? Number(trRaw) : null;
+  const mismatched = tr != null && Number.isFinite(tr) && tr !== selfId;
+  if (mismatched) {
+    const membersUnderSelf = await User.countDocuments({
+      isMaster: { $ne: true },
+      tenantRootUserId: selfId,
+    });
+    if (membersUnderSelf > 0) {
+      return selfId;
+    }
+  }
+  return tenantRootFromUserDoc(doc);
+}
+
+module.exports = {
+  tenantRootFromUserDoc,
+  resolveTenantRootFromAdminPicker,
+  resolveWorkspaceTenantRootUserId,
+};

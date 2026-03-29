@@ -1,4 +1,4 @@
-const APP_VERSION = '12.0.9';
+const APP_VERSION = '12.0.10';
 
 let __loginErrorDismissTimer = null;
 

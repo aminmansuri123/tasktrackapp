@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { JWT_SECRET } = require('../config');
+const { resolveWorkspaceTenantRootUserId } = require('../services/tenantRoot');
 
 function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
@@ -44,11 +45,13 @@ async function authMiddleware(req, res, next) {
   if (!doc || !doc.isActive) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  const workspaceTenantRoot = await resolveWorkspaceTenantRootUserId(doc);
   req.user = {
     userId: doc.userId,
     role: doc.role,
     isMaster: !!doc.isMaster,
     tenantRootUserId: doc.tenantRootUserId,
+    workspaceTenantRoot,
   };
   next();
 }

@@ -15,10 +15,14 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '12.0.9';
+const EXPORT_VERSION = '12.0.10';
 
 function resolveTenantRoot(req) {
   if (req.user.isMaster) return null;
+  const w = req.user.workspaceTenantRoot;
+  if (w != null && w !== '' && !Number.isNaN(Number(w))) {
+    return Number(w);
+  }
   const tr = req.user.tenantRootUserId;
   if (tr != null && tr !== '' && !Number.isNaN(Number(tr))) {
     return Number(tr);
