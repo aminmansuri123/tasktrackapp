@@ -5,7 +5,7 @@ const ReminderPreference = require('../models/ReminderPreference');
 const { authMiddleware } = require('../middleware/auth');
 const { defaultWorkspaceData, normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
-const { isEmailEnabled, sendTestEmail } = require('../services/emailService');
+const { isEmailEnabled, sendTestEmail, sendTaskAssignmentEmail } = require('../services/emailService');
 const { SMTP_CONFIGURED } = require('../config');
 const {
   syncUsersFromClientPayload,
@@ -18,7 +18,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '15.2.0';
+const EXPORT_VERSION = '15.3.0';
 
 /**
  * Determine workspace tenant root for the current request.
@@ -385,6 +385,8 @@ router.get('/reminder-prefs', authMiddleware, async (req, res) => {
       enabled: true,
       beforeDueDate: pref ? pref.beforeDueDate : true,
       afterDueDate: pref ? pref.afterDueDate : true,
+      notifyOnAssign: pref ? pref.notifyOnAssign !== false : true,
+      notifyOnSelfAssign: pref ? !!pref.notifyOnSelfAssign : false,
       setByAdmin: pref ? !!pref.setByAdmin : false,
     });
   } catch (e) {
@@ -396,14 +398,20 @@ router.get('/reminder-prefs', authMiddleware, async (req, res) => {
 router.put('/reminder-prefs', authMiddleware, async (req, res) => {
   if (!SMTP_CONFIGURED) return res.json({ enabled: false });
   try {
-    const { beforeDueDate, afterDueDate } = req.body || {};
+    const { beforeDueDate, afterDueDate, notifyOnAssign, notifyOnSelfAssign } = req.body || {};
     const existing = await ReminderPreference.findOne({ userId: req.user.userId });
     if (existing && existing.setByAdmin && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Your reminder preferences are managed by your admin.' });
     }
     await ReminderPreference.findOneAndUpdate(
       { userId: req.user.userId },
-      { beforeDueDate: !!beforeDueDate, afterDueDate: !!afterDueDate, setByAdmin: false },
+      {
+        beforeDueDate: !!beforeDueDate,
+        afterDueDate: !!afterDueDate,
+        notifyOnAssign: notifyOnAssign !== false,
+        notifyOnSelfAssign: !!notifyOnSelfAssign,
+        setByAdmin: false,
+      },
       { upsert: true, new: true }
     );
     return res.json({ ok: true });
@@ -421,10 +429,16 @@ router.put('/reminder-prefs/:userId', authMiddleware, async (req, res) => {
   try {
     const targetUserId = parseInt(req.params.userId, 10);
     if (Number.isNaN(targetUserId)) return res.status(400).json({ error: 'Invalid userId' });
-    const { beforeDueDate, afterDueDate } = req.body || {};
+    const { beforeDueDate, afterDueDate, notifyOnAssign, notifyOnSelfAssign } = req.body || {};
     await ReminderPreference.findOneAndUpdate(
       { userId: targetUserId },
-      { beforeDueDate: !!beforeDueDate, afterDueDate: !!afterDueDate, setByAdmin: true },
+      {
+        beforeDueDate: !!beforeDueDate,
+        afterDueDate: !!afterDueDate,
+        notifyOnAssign: notifyOnAssign !== false,
+        notifyOnSelfAssign: !!notifyOnSelfAssign,
+        setByAdmin: true,
+      },
       { upsert: true, new: true }
     );
     return res.json({ ok: true });
@@ -459,6 +473,8 @@ router.get('/reminder-prefs/org-users', authMiddleware, async (req, res) => {
         email: u.email,
         beforeDueDate: p ? p.beforeDueDate : true,
         afterDueDate: p ? p.afterDueDate : true,
+        notifyOnAssign: p ? p.notifyOnAssign !== false : true,
+        notifyOnSelfAssign: p ? !!p.notifyOnSelfAssign : false,
         setByAdmin: p ? !!p.setByAdmin : false,
       };
     });
@@ -469,17 +485,52 @@ router.get('/reminder-prefs/org-users', authMiddleware, async (req, res) => {
   }
 });
 
+router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
+  if (!SMTP_CONFIGURED) return res.json({ ok: true, skipped: true });
+  try {
+    const { assignedToUserId, taskTitle, dueDate, isSelf } = req.body || {};
+    const assigneeId = parseInt(String(assignedToUserId), 10);
+    if (Number.isNaN(assigneeId)) return res.status(400).json({ error: 'Invalid assignedToUserId' });
+
+    const assignee = await User.findOne({ userId: assigneeId }).lean();
+    if (!assignee || !assignee.email) return res.json({ ok: true, skipped: true });
+
+    const pref = await ReminderPreference.findOne({ userId: assigneeId }).lean();
+    const wantsAssignNotify = pref ? pref.notifyOnAssign !== false : true;
+    const wantsSelfNotify = pref ? !!pref.notifyOnSelfAssign : false;
+
+    if (!wantsAssignNotify) return res.json({ ok: true, skipped: true });
+    if (isSelf && !wantsSelfNotify) return res.json({ ok: true, skipped: true });
+
+    const assigner = await User.findOne({ userId: req.user.userId }).lean();
+    const assignerName = assigner ? (assigner.name || assigner.email) : 'Admin';
+
+    await sendTaskAssignmentEmail(
+      assignee.email,
+      assignee.name || assignee.email,
+      taskTitle || '(untitled)',
+      dueDate || null,
+      assignerName,
+      !!isSelf
+    );
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('notify-task-assigned error:', e);
+    return res.json({ ok: true, skipped: true });
+  }
+});
+
 router.post('/send-test-reminder', authMiddleware, async (req, res) => {
-  if (!SMTP_CONFIGURED) return res.status(400).json({ error: 'Email not configured on server.' });
+  if (!SMTP_CONFIGURED) return res.status(400).json({ error: 'Email not configured on server. Set SMTP_EMAIL and SMTP_PASSWORD environment variables.' });
   try {
     const user = await User.findOne({ userId: req.user.userId }).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
     const ok = await sendTestEmail(user.email, user.name || user.email);
-    if (ok) return res.json({ ok: true, message: `Test email sent to ${user.email}` });
-    return res.status(500).json({ error: 'Email send failed. Check server SMTP settings.' });
+    if (ok) return res.json({ ok: true, message: `Test email sent successfully to ${user.email}. Check your inbox (and spam folder).` });
+    return res.status(500).json({ error: 'Email send failed. Check server logs and verify SMTP credentials (SMTP_EMAIL, SMTP_PASSWORD, SMTP_HOST, SMTP_PORT).' });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Test email failed' });
+    console.error('send-test-reminder error:', e);
+    return res.status(500).json({ error: `Test email failed: ${e.message || 'Unknown error'}. Check server SMTP settings.` });
   }
 });
 

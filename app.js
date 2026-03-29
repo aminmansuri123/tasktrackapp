@@ -1,4 +1,4 @@
-const APP_VERSION = '15.2.0';
+const APP_VERSION = '15.3.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -4184,6 +4184,23 @@ function saveTask(event) {
     renderDashboard();
     renderCalendar();
     renderInteractiveDashboard();
+
+    if (isApiMode() && currentUser && currentUser.smtpConfigured) {
+        const isNewTask = !isEdit;
+        const assignChanged = isEdit && existingTask && Number(existingTask.assigned_to) !== assignPick;
+        if (isNewTask || assignChanged) {
+            const isSelf = assignPick === Number(currentUser.id);
+            apiFetch('/api/workspace/notify-task-assigned', {
+                method: 'POST',
+                body: JSON.stringify({
+                    assignedToUserId: assignPick,
+                    taskTitle: task.task_name,
+                    dueDate: task.due_date || task.next_due_date || null,
+                    isSelf,
+                }),
+            }).catch(e => console.error('Task assignment notification failed:', e));
+        }
+    }
 }
 
 // Quick Task Functions
@@ -5826,8 +5843,8 @@ function renderSettings() {
                     <p style="color:#666;font-size:12px;margin-top:4px;">These tabs are hidden by default. Check the boxes to enable for the selected user.</p>
                 </div>
                 <div class="form-group" style="margin-bottom:16px;">
-                    <label>7 — Share user with additional admins (select user above first)</label>
-                    <p style="color:#666;font-size:12px;margin-bottom:6px;">A shared user appears in multiple admins' User Management and can be assigned tasks by each of them.</p>
+                    <label>7 — Share user/admin with additional admins (select user above first)</label>
+                    <p style="color:#666;font-size:12px;margin-bottom:6px;">A shared user or admin appears in multiple admins' User Management and can be assigned tasks by each of them. Admins can also be shared — this allows one admin to assign tasks to another admin.</p>
                     <div id="masterShareAdminCheckboxes" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;"></div>
                     <button type="button" class="btn btn-primary" style="padding:4px 14px;font-size:13px;" onclick="masterApiSaveSharing()">Save sharing</button>
                 </div>
@@ -5946,14 +5963,25 @@ async function renderReminderPrefsSection() {
         const pref = await res.json();
         if (!pref.enabled) { wrap.style.display = 'none'; return; }
 
+        const adminLocked = pref.setByAdmin && currentUser.role !== 'admin';
         let html = `
-            <p style="color:#666;font-size:13px;margin-bottom:12px;">Receive daily email reminders for tasks due tomorrow and overdue tasks. Emails are sent at the scheduled time configured on the server.</p>
+            <p style="color:#666;font-size:13px;margin-bottom:12px;">Configure email notifications for task reminders and task assignments.</p>
+            <h4 style="margin:0 0 8px;font-size:14px;">Daily Reminders</h4>
             <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                    <input type="checkbox" id="reminderBeforeDue" ${pref.beforeDueDate ? 'checked' : ''} ${pref.setByAdmin && currentUser.role !== 'admin' ? 'disabled' : ''}> Remind me about tasks due <strong>tomorrow</strong>
+                    <input type="checkbox" id="reminderBeforeDue" ${pref.beforeDueDate ? 'checked' : ''} ${adminLocked ? 'disabled' : ''}> Remind me about tasks due <strong>tomorrow</strong>
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                    <input type="checkbox" id="reminderAfterDue" ${pref.afterDueDate ? 'checked' : ''} ${pref.setByAdmin && currentUser.role !== 'admin' ? 'disabled' : ''}> Remind me about <strong>overdue</strong> tasks
+                    <input type="checkbox" id="reminderAfterDue" ${pref.afterDueDate ? 'checked' : ''} ${adminLocked ? 'disabled' : ''}> Remind me about <strong>overdue</strong> tasks
+                </label>
+            </div>
+            <h4 style="margin:0 0 8px;font-size:14px;">Task Assignment Notifications</h4>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="reminderOnAssign" ${pref.notifyOnAssign ? 'checked' : ''} ${adminLocked ? 'disabled' : ''}> Email me when a task is <strong>assigned to me</strong>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="reminderOnSelfAssign" ${pref.notifyOnSelfAssign ? 'checked' : ''} ${adminLocked ? 'disabled' : ''}> Email me when I assign a task to <strong>myself</strong>
                 </label>
             </div>`;
 
@@ -5987,11 +6015,18 @@ async function renderReminderPrefsSection() {
 async function saveReminderPrefs() {
     const before = document.getElementById('reminderBeforeDue');
     const after = document.getElementById('reminderAfterDue');
+    const onAssign = document.getElementById('reminderOnAssign');
+    const onSelfAssign = document.getElementById('reminderOnSelfAssign');
     if (!before || !after) return;
     try {
         const res = await apiFetch('/api/workspace/reminder-prefs', {
             method: 'PUT',
-            body: JSON.stringify({ beforeDueDate: before.checked, afterDueDate: after.checked }),
+            body: JSON.stringify({
+                beforeDueDate: before.checked,
+                afterDueDate: after.checked,
+                notifyOnAssign: onAssign ? onAssign.checked : true,
+                notifyOnSelfAssign: onSelfAssign ? onSelfAssign.checked : false,
+            }),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -6037,6 +6072,8 @@ async function loadAdminReminderUsersTable() {
                 <td style="padding:6px 10px;font-size:13px;color:#666;">${escapeHtml(u.email)}</td>
                 <td style="padding:6px 10px;text-align:center;"><input type="checkbox" data-uid="${u.userId}" data-field="before" ${u.beforeDueDate ? 'checked' : ''}></td>
                 <td style="padding:6px 10px;text-align:center;"><input type="checkbox" data-uid="${u.userId}" data-field="after" ${u.afterDueDate ? 'checked' : ''}></td>
+                <td style="padding:6px 10px;text-align:center;"><input type="checkbox" data-uid="${u.userId}" data-field="onAssign" ${u.notifyOnAssign ? 'checked' : ''}></td>
+                <td style="padding:6px 10px;text-align:center;"><input type="checkbox" data-uid="${u.userId}" data-field="selfAssign" ${u.notifyOnSelfAssign ? 'checked' : ''}></td>
                 <td style="padding:6px 10px;text-align:center;">
                     <button type="button" class="btn btn-primary" style="padding:3px 10px;font-size:12px;" onclick="saveAdminReminderPref(${u.userId})">Save</button>
                 </td>
@@ -6048,6 +6085,8 @@ async function loadAdminReminderUsersTable() {
                     <th style="padding:6px 10px;">Email</th>
                     <th style="padding:6px 10px;text-align:center;">Before Due</th>
                     <th style="padding:6px 10px;text-align:center;">Overdue</th>
+                    <th style="padding:6px 10px;text-align:center;">On Assign</th>
+                    <th style="padding:6px 10px;text-align:center;">Self Assign</th>
                     <th style="padding:6px 10px;text-align:center;">Action</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
@@ -6061,11 +6100,18 @@ async function loadAdminReminderUsersTable() {
 async function saveAdminReminderPref(userId) {
     const beforeEl = document.querySelector(`input[data-uid="${userId}"][data-field="before"]`);
     const afterEl = document.querySelector(`input[data-uid="${userId}"][data-field="after"]`);
+    const onAssignEl = document.querySelector(`input[data-uid="${userId}"][data-field="onAssign"]`);
+    const selfAssignEl = document.querySelector(`input[data-uid="${userId}"][data-field="selfAssign"]`);
     if (!beforeEl || !afterEl) return;
     try {
         const res = await apiFetch(`/api/workspace/reminder-prefs/${userId}`, {
             method: 'PUT',
-            body: JSON.stringify({ beforeDueDate: beforeEl.checked, afterDueDate: afterEl.checked }),
+            body: JSON.stringify({
+                beforeDueDate: beforeEl.checked,
+                afterDueDate: afterEl.checked,
+                notifyOnAssign: onAssignEl ? onAssignEl.checked : true,
+                notifyOnSelfAssign: selfAssignEl ? selfAssignEl.checked : false,
+            }),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));

@@ -5,6 +5,8 @@ const reminderPreferenceSchema = new mongoose.Schema(
     userId: { type: Number, required: true, unique: true, index: true },
     beforeDueDate: { type: Boolean, default: true },
     afterDueDate: { type: Boolean, default: true },
+    notifyOnAssign: { type: Boolean, default: true },
+    notifyOnSelfAssign: { type: Boolean, default: false },
     setByAdmin: { type: Boolean, default: false },
   },
   { timestamps: true }
