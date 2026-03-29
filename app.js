@@ -1,4 +1,4 @@
-const APP_VERSION = '15.5.0';
+const APP_VERSION = '15.5.2';
 
 let __loginErrorDismissTimer = null;
 
@@ -45,12 +45,17 @@ function buildWorkspacePayloadForPut() {
     return payload;
 }
 
+function applyPendingPasswordClearsFromUsers(users) {
+    if (!users || !Array.isArray(users)) return;
+    for (const u of users) {
+        const id = typeof u.id === 'number' ? u.id : parseInt(String(u.id), 10);
+        if (!Number.isNaN(id)) __pendingPasswordsByUserId.delete(id);
+    }
+}
+
 function applyWorkspacePutSuccess(normalized) {
     if (normalized && Array.isArray(normalized.users)) {
-        for (const u of normalized.users) {
-            const id = typeof u.id === 'number' ? u.id : parseInt(String(u.id), 10);
-            if (!Number.isNaN(id)) __pendingPasswordsByUserId.delete(id);
-        }
+        applyPendingPasswordClearsFromUsers(normalized.users);
     }
     __workspaceCache = normalized;
 }
@@ -65,6 +70,8 @@ let drilldownContext = null; // Stores: { type, title, count, filterFunction, mo
 let __workspaceCache = null;
 let __workspacePushTimer = null;
 let __lastWorkspacePutError = '';
+/** Bumped on each tenant save while syncing; avoids applying a stale PUT response after newer local edits (e.g. rapid task creates). */
+let __workspaceMutationGen = 0;
 const WORKSPACE_PUSH_DEBOUNCE_MS = 400;
 
 function isApiMode() {
@@ -111,6 +118,7 @@ function scheduleWorkspacePush() {
 
 async function putWorkspaceCacheToServer() {
     if (!isApiMode() || !__workspaceCache) return false;
+    const genAtPutStart = __workspaceMutationGen;
     __lastWorkspacePutError = '';
     try {
         const payload = buildWorkspacePayloadForPut();
@@ -133,7 +141,14 @@ async function putWorkspaceCacheToServer() {
             return false;
         }
         const body = await res.json();
-        applyWorkspacePutSuccess(normalizeData(body));
+        const normalized = normalizeData(body);
+        if (genAtPutStart !== __workspaceMutationGen) {
+            // Local workspace changed while this request was in flight; applying the body would drop newer edits.
+            applyPendingPasswordClearsFromUsers(normalized.users);
+            scheduleWorkspacePush();
+            return true;
+        }
+        applyWorkspacePutSuccess(normalized);
         return true;
     } catch (e) {
         __lastWorkspacePutError = e && e.message ? String(e.message) : 'Network or client error';
@@ -673,6 +688,9 @@ function saveData(data) {
     const normalized = normalizeData(data);
     if (isApiMode()) {
         __workspaceCache = normalized;
+        if (currentUser && !currentUser.isMaster) {
+            __workspaceMutationGen++;
+        }
         if (currentUser) {
             scheduleWorkspacePush();
         }

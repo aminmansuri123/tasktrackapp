@@ -116,6 +116,11 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+/** Appended to every HTML email body for consistent branding. */
+function emailBrandFooterHtml() {
+  return '<p style="font-size:12px;color:#94a3b8;margin:20px 0 0;padding-top:16px;border-top:1px solid #e2e8f0;text-align:center;line-height:1.5;">Live — developed by Amin Mansuri</p>';
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return 'N/A';
   const d = new Date(dateStr + 'T00:00:00');
@@ -176,6 +181,7 @@ function buildReminderHtml(userName, overdueTasks, upcomingTasks) {
         <tbody>${upcomingRows}</tbody>
       </table>` : ''}
       <p style="font-size:13px;color:#999;margin-top:16px;">This is an automated reminder from your Task Management System.</p>
+      ${emailBrandFooterHtml()}
     </div>
   </div>
 </body>
@@ -218,6 +224,7 @@ function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isS
       </table>
       <p style="font-size:13px;color:#666;">${isSelf ? 'You created this task for yourself.' : `Assigned by <strong>${escapeHtml(assignerName || 'an admin')}</strong>.`}</p>
       <p style="font-size:13px;color:#999;margin-top:16px;">This is an automated notification from your Task Management System.</p>
+      ${emailBrandFooterHtml()}
     </div>
   </div>
 </body>
@@ -265,6 +272,7 @@ function buildTaskRejectedHtml(assigneeName, taskTitle, comment, adminName) {
         <p style="margin:0;white-space:pre-wrap;font-size:14px;color:#333;">${escapeHtml(comment)}</p>
       </div>
       <p style="font-size:13px;color:#999;margin-top:20px;">Please update the task as needed and resubmit when ready.</p>
+      ${emailBrandFooterHtml()}
     </div>
   </div>
 </body>
@@ -298,6 +306,7 @@ function buildAccountCreatedHtml(userName, contextHtml) {
       ${contextHtml}
       <p style="font-size:14px;color:#333;margin-top:16px;">Sign in with <strong>this email address</strong> and your password.</p>
       <p style="font-size:13px;color:#999;margin-top:16px;">This message was sent automatically. Do not reply with your password.</p>
+      ${emailBrandFooterHtml()}
     </div>
   </div>
 </body>
