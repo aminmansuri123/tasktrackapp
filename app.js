@@ -5566,15 +5566,43 @@ async function saveUser(event) {
     event.preventDefault();
     const userId = document.getElementById('userId').value;
     const password = document.getElementById('userPassword').value;
+    const email = (document.getElementById('userEmail').value || '').trim().toLowerCase();
 
     if (!userId && (!password || password.length < 6)) {
         alert('Password is required (min 6 characters) for new users.');
         return;
     }
 
-    updateData(data => {
+    if (!email) {
+        alert('Email is required.');
+        return;
+    }
+
+    if (isApiMode() && !userId) {
+        try {
+            const chk = await apiFetch(`/api/auth/check-email?email=${encodeURIComponent(email)}`);
+            if (chk.ok) {
+                const r = await chk.json();
+                if (r.exists) {
+                    alert('A user with this email already exists. Please use a different email.');
+                    return;
+                }
+            }
+        } catch (_) { /* proceed offline */ }
+    }
+
+    const data = getData();
+    if (!userId) {
+        const localDup = (data.users || []).some(u => (u.email || '').toLowerCase().trim() === email);
+        if (localDup) {
+            alert('A user with this email already exists in your organisation.');
+            return;
+        }
+    }
+
+    updateData(d => {
         if (userId) {
-            const user = data.users.find(u => u.id === parseInt(userId));
+            const user = d.users.find(u => u.id === parseInt(userId));
             if (user) {
                 user.name = document.getElementById('userName').value;
                 user.email = document.getElementById('userEmail').value;
@@ -5593,7 +5621,7 @@ async function saveUser(event) {
                 role: 'user',
                 is_active: document.getElementById('userIsActive').checked
             };
-            data.users.push(newUser);
+            d.users.push(newUser);
             rememberPendingUserPasswordForSync(newUser.id, password);
         }
     });
@@ -5758,6 +5786,12 @@ function renderSettings() {
                         <button type="button" class="btn btn-primary" style="padding:4px 14px;font-size:13px;" onclick="masterApiSaveFeatures()">Save features</button>
                     </div>
                     <p style="color:#666;font-size:12px;margin-top:4px;">These tabs are hidden by default. Check the boxes to enable for the selected user.</p>
+                </div>
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label>7 — Share user with additional admins (select user above first)</label>
+                    <p style="color:#666;font-size:12px;margin-bottom:6px;">A shared user appears in multiple admins' User Management and can be assigned tasks by each of them.</p>
+                    <div id="masterShareAdminCheckboxes" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;"></div>
+                    <button type="button" class="btn btn-primary" style="padding:4px 14px;font-size:13px;" onclick="masterApiSaveSharing()">Save sharing</button>
                 </div>
                 <hr style="margin:28px 0;border:none;border-top:1px solid #e5e5e5;">
                 <h3>Master password reset</h3>
@@ -6098,17 +6132,37 @@ function masterHydrateFeatureCheckboxes() {
     const uid = sel ? parseInt(sel.value, 10) : NaN;
     const locCb = document.getElementById('masterFeatureLocations');
     const snipCb = document.getElementById('masterFeatureCodeSnippets');
-    if (!locCb || !snipCb) return;
-    if (Number.isNaN(uid) || uid <= 0) {
-        locCb.checked = false;
-        snipCb.checked = false;
-        return;
-    }
+    if (locCb) locCb.checked = false;
+    if (snipCb) snipCb.checked = false;
+
+    const shareWrap = document.getElementById('masterShareAdminCheckboxes');
+    if (shareWrap) shareWrap.innerHTML = '<span style="color:#999;font-size:13px;">Select a user above to see sharing options</span>';
+
+    if (Number.isNaN(uid) || uid <= 0) return;
+
     const data = getData();
     const user = (data.users || []).find(u => Number(u.id) === uid);
     const feats = (user && Array.isArray(user.enabledFeatures)) ? user.enabledFeatures : [];
-    locCb.checked = feats.includes('locations');
-    snipCb.checked = feats.includes('codeSnippets');
+    if (locCb) locCb.checked = feats.includes('locations');
+    if (snipCb) snipCb.checked = feats.includes('codeSnippets');
+
+    if (shareWrap) {
+        const userTenantRoot = user ? Number(user.tenantRootUserId || user.tenant_admin_root_id || 0) : 0;
+        const shared = (user && Array.isArray(user.sharedWithTenants)) ? user.sharedWithTenants.map(Number) : [];
+        const admins = (data.users || []).filter(u => u.role === 'admin' && !isMasterUserRecord(u) && Number(u.id) !== uid);
+        if (admins.length === 0) {
+            shareWrap.innerHTML = '<span style="color:#999;font-size:13px;">No other admins available</span>';
+        } else {
+            shareWrap.innerHTML = admins.map(a => {
+                const aRoot = Number(a.tenantRootUserId || a.tenant_admin_root_id || a.id);
+                const isPrimary = aRoot === userTenantRoot;
+                const isChecked = isPrimary || shared.includes(aRoot);
+                return `<label style="display:flex;align-items:center;gap:5px;cursor:${isPrimary ? 'default' : 'pointer'};opacity:${isPrimary ? '0.6' : '1'};">
+                    <input type="checkbox" data-admin-root="${aRoot}" ${isChecked ? 'checked' : ''} ${isPrimary ? 'disabled' : ''}> ${escapeHtml(a.name)} (${escapeHtml(a.email)})${isPrimary ? ' <em style="font-size:11px;">(primary)</em>' : ''}
+                </label>`;
+            }).join('');
+        }
+    }
 }
 
 async function masterApiSaveFeatures() {
@@ -6133,6 +6187,46 @@ async function masterApiSaveFeatures() {
             return;
         }
         alert('Features updated.');
+        await masterRefreshAfterUserChange();
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+async function masterApiSaveSharing() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const sel = document.getElementById('masterManageUserId');
+    const uid = sel ? parseInt(sel.value, 10) : NaN;
+    if (Number.isNaN(uid) || uid <= 0) {
+        alert('Select a user first.');
+        return;
+    }
+    const data = getData();
+    const user = (data.users || []).find(u => Number(u.id) === uid);
+    const userTenantRoot = user ? Number(user.tenantRootUserId || user.tenant_admin_root_id || 0) : 0;
+
+    const wrap = document.getElementById('masterShareAdminCheckboxes');
+    const shared = [];
+    if (wrap) {
+        wrap.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            if (cb.checked && !cb.disabled) {
+                const root = parseInt(cb.getAttribute('data-admin-root'), 10);
+                if (!Number.isNaN(root) && root !== userTenantRoot) shared.push(root);
+            }
+        });
+    }
+    try {
+        const res = await apiFetch(`/api/master/users/${uid}/share`, {
+            method: 'PATCH',
+            body: JSON.stringify({ sharedWithTenants: shared }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Share update failed');
+            return;
+        }
+        alert('Sharing updated. The user will now appear in the selected admins\' User Management.');
         await masterRefreshAfterUserChange();
     } catch (e) {
         console.error(e);

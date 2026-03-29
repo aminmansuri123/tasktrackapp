@@ -13,6 +13,8 @@ const userSchema = new mongoose.Schema(
     tenantRootUserId: { type: Number, default: null, index: true },
     /** Feature flags toggled by master: 'locations', 'codeSnippets' */
     enabledFeatures: { type: [String], default: [] },
+    /** Additional tenant roots this user is shared with (visible + assignable in those orgs). */
+    sharedWithTenants: { type: [Number], default: [] },
   },
   { timestamps: true }
 );

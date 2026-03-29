@@ -16,11 +16,13 @@ async function usersToClientShapeForTenant(tenantRootUserId) {
   if (root == null || Number.isNaN(root)) {
     return [];
   }
-  // Include rows tied to this tenant AND the org owner row (userId === root) even if
-  // tenantRootUserId was null/legacy on that document — avoids empty User Management.
   const list = await User.find({
     isMaster: { $ne: true },
-    $or: [{ tenantRootUserId: root }, { userId: root }],
+    $or: [
+      { tenantRootUserId: root },
+      { userId: root },
+      { sharedWithTenants: root },
+    ],
   })
     .sort({ userId: 1 })
     .lean();
@@ -36,6 +38,7 @@ async function usersToClientShapeForTenant(tenantRootUserId) {
     is_active: u.isActive,
     isMaster: u.isMaster,
     enabledFeatures: Array.isArray(u.enabledFeatures) ? u.enabledFeatures : [],
+    isShared: Array.isArray(u.sharedWithTenants) && u.sharedWithTenants.includes(root) && u.tenantRootUserId !== root,
   }));
 }
 
@@ -72,6 +75,7 @@ async function usersToClientShapeAll() {
       tenant_admin_root_id: adminRoot,
       tenant_admin_label: tenantAdminLabel,
       enabledFeatures: Array.isArray(u.enabledFeatures) ? u.enabledFeatures : [],
+      sharedWithTenants: Array.isArray(u.sharedWithTenants) ? u.sharedWithTenants : [],
     };
   });
 }
@@ -268,6 +272,8 @@ async function deleteUsersNotInPayload(
   for (const u of all) {
     if (u.isMaster) continue;
     if (u.userId === tenantRootUserId) continue;
+    const isSharedHere = Array.isArray(u.sharedWithTenants) && u.sharedWithTenants.includes(root) && u.tenantRootUserId !== root;
+    if (isSharedHere) continue;
     if (!allowed.has(u.userId)) {
       if (replaceAllTenantUsers === true) {
         await User.deleteOne({ _id: u._id });

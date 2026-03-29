@@ -44,6 +44,18 @@ router.get('/registration-policy', async (_req, res) => {
   }
 });
 
+router.get('/check-email', async (req, res) => {
+  try {
+    const email = String(req.query.email || '').toLowerCase().trim();
+    if (!email) return res.json({ exists: false });
+    const doc = await User.findOne({ email }).lean();
+    return res.json({ exists: !!doc });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Check failed' });
+  }
+});
+
 /** Active non-master admins (for team signup: pick any admin in the org). */
 router.get('/org-admins', async (_req, res) => {
   try {

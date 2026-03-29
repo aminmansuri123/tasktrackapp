@@ -267,6 +267,50 @@ router.patch('/users/:userId', authMiddleware, requireMaster, async (req, res) =
   }
 });
 
+router.patch('/users/:userId/share', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (Number.isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user' });
+    }
+    const target = await User.findOne({ userId });
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (target.isMaster) {
+      return res.status(403).json({ error: 'Cannot share master account' });
+    }
+    const { sharedWithTenants } = req.body || {};
+    if (!Array.isArray(sharedWithTenants)) {
+      return res.status(400).json({ error: 'sharedWithTenants must be an array of admin userIds' });
+    }
+    const validRoots = [];
+    for (const raw of sharedWithTenants) {
+      const id = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
+      if (Number.isNaN(id)) continue;
+      if (id === Number(target.tenantRootUserId)) continue;
+      const admin = await User.findOne({ userId: id, role: 'admin', isMaster: { $ne: true }, isActive: true });
+      if (admin) {
+        const rootId = admin.tenantRootUserId != null ? Number(admin.tenantRootUserId) : admin.userId;
+        if (!validRoots.includes(rootId)) validRoots.push(rootId);
+      }
+    }
+    target.sharedWithTenants = validRoots;
+    await target.save();
+
+    const affectedRoots = new Set(validRoots);
+    if (target.tenantRootUserId != null) affectedRoots.add(Number(target.tenantRootUserId));
+    for (const r of affectedRoots) {
+      await reconcileWorkspaceEmbeddedUsersForTenant(r);
+    }
+
+    return res.json({ ok: true, sharedWithTenants: target.sharedWithTenants });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Share update failed' });
+  }
+});
+
 router.get('/registration-policy', authMiddleware, requireMaster, async (_req, res) => {
   try {
     const s = await getSiteSettings();
