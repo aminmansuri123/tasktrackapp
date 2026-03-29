@@ -2,29 +2,46 @@ const dns = require('dns');
 const nodemailer = require('nodemailer');
 const { SMTP_EMAIL, SMTP_PASSWORD, SMTP_HOST, SMTP_PORT, SMTP_CONFIGURED } = require('../config');
 
-// Force IPv4 DNS resolution — many cloud providers (Render, Railway, etc.)
-// don't support outbound IPv6, causing ENETUNREACH errors with Gmail SMTP.
-dns.setDefaultResultOrder('ipv4first');
-
 function isEmailEnabled() {
   return SMTP_CONFIGURED;
 }
 
 let _transporter = null;
+let _resolvedIpv4 = null;
 
-function getTransporter() {
+function resolveHostIpv4() {
+  return new Promise((resolve) => {
+    dns.lookup(SMTP_HOST, { family: 4 }, (err, address) => {
+      if (err) {
+        console.warn('[email] IPv4 DNS lookup failed, using hostname:', err.message);
+        resolve(SMTP_HOST);
+      } else {
+        console.log(`[email] Resolved ${SMTP_HOST} → ${address} (IPv4)`);
+        resolve(address);
+      }
+    });
+  });
+}
+
+async function getTransporter() {
   if (!SMTP_CONFIGURED) return null;
   if (_transporter) return _transporter;
+
+  if (!_resolvedIpv4) {
+    _resolvedIpv4 = await resolveHostIpv4();
+  }
+
   _transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
+    host: _resolvedIpv4,
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
     auth: { user: SMTP_EMAIL, pass: SMTP_PASSWORD },
+    tls: { servername: SMTP_HOST },
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 15000,
   });
-  console.log(`[email] Transporter created: ${SMTP_HOST}:${SMTP_PORT} secure=${SMTP_PORT === 465}`);
+  console.log(`[email] Transporter created: ${_resolvedIpv4}:${SMTP_PORT} (from ${SMTP_HOST}), secure=${SMTP_PORT === 465}`);
   return _transporter;
 }
 
@@ -96,7 +113,7 @@ function buildReminderHtml(userName, overdueTasks, upcomingTasks) {
 
 async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTasks) {
   if (!isEmailEnabled()) return false;
-  const transporter = getTransporter();
+  const transporter = await getTransporter();
   if (!transporter) return false;
 
   const total = overdueTasks.length + upcomingTasks.length;
@@ -149,7 +166,7 @@ function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isS
 
 async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate, assignerName, isSelf) {
   if (!isEmailEnabled()) return false;
-  const transporter = getTransporter();
+  const transporter = await getTransporter();
   if (!transporter) return false;
 
   const subject = isSelf
@@ -172,7 +189,7 @@ async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate
 
 async function sendTestEmail(toEmail, userName) {
   if (!isEmailEnabled()) throw new Error('SMTP not configured');
-  const transporter = getTransporter();
+  const transporter = await getTransporter();
   if (!transporter) throw new Error('Could not create email transporter');
   const demoTask = {
     title: 'Sample Task — Test Reminder',
