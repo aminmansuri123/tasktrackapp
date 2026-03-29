@@ -1,4 +1,4 @@
-const APP_VERSION = '15.1.0';
+const APP_VERSION = '15.2.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -969,6 +969,7 @@ async function login() {
             return;
         }
         currentUser = body.user;
+        if (body.smtpConfigured != null) currentUser.smtpConfigured = body.smtpConfigured;
         if (body.token) setApiAuthToken(body.token);
         sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
@@ -5923,6 +5924,158 @@ function renderSettings() {
                 note.style.display = note.textContent ? 'block' : 'none';
             }
         }
+    }
+
+    renderReminderPrefsSection();
+}
+
+async function renderReminderPrefsSection() {
+    const wrap = document.getElementById('settingsTaskReminders');
+    const content = document.getElementById('reminderPrefsContent');
+    if (!wrap || !content) return;
+    if (!isApiMode() || !currentUser || !currentUser.smtpConfigured) {
+        wrap.style.display = 'none';
+        return;
+    }
+    wrap.style.display = 'block';
+    content.innerHTML = '<span style="color:#999;">Loading reminder preferences…</span>';
+
+    try {
+        const res = await apiFetch('/api/workspace/reminder-prefs');
+        if (!res.ok) { content.innerHTML = '<span style="color:#c00;">Could not load preferences</span>'; return; }
+        const pref = await res.json();
+        if (!pref.enabled) { wrap.style.display = 'none'; return; }
+
+        let html = `
+            <p style="color:#666;font-size:13px;margin-bottom:12px;">Receive daily email reminders for tasks due tomorrow and overdue tasks. Emails are sent at the scheduled time configured on the server.</p>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="reminderBeforeDue" ${pref.beforeDueDate ? 'checked' : ''} ${pref.setByAdmin && currentUser.role !== 'admin' ? 'disabled' : ''}> Remind me about tasks due <strong>tomorrow</strong>
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="reminderAfterDue" ${pref.afterDueDate ? 'checked' : ''} ${pref.setByAdmin && currentUser.role !== 'admin' ? 'disabled' : ''}> Remind me about <strong>overdue</strong> tasks
+                </label>
+            </div>`;
+
+        if (pref.setByAdmin && currentUser.role !== 'admin') {
+            html += `<p style="color:#e67e22;font-size:12px;margin-bottom:10px;">Your admin has set these preferences. Contact your admin to change them.</p>`;
+        } else {
+            html += `<button type="button" class="btn btn-primary" style="padding:6px 16px;font-size:13px;" onclick="saveReminderPrefs()">Save my preferences</button>`;
+        }
+
+        html += `<button type="button" class="btn btn-secondary" style="padding:6px 16px;font-size:13px;margin-left:8px;" onclick="sendTestReminder()">Send test email</button>`;
+
+        if (currentUser.role === 'admin' && !currentUser.isMaster) {
+            html += `
+                <hr style="margin:20px 0;border:none;border-top:1px solid #e5e5e5;">
+                <h4 style="margin:0 0 8px;">Manage user reminders</h4>
+                <p style="color:#666;font-size:12px;margin-bottom:10px;">Override reminder preferences for your team users. When set by admin, users cannot change these settings themselves.</p>
+                <div id="adminReminderUsersTable"><span style="color:#999;">Loading…</span></div>`;
+        }
+
+        content.innerHTML = html;
+
+        if (currentUser.role === 'admin' && !currentUser.isMaster) {
+            void loadAdminReminderUsersTable();
+        }
+    } catch (e) {
+        console.error(e);
+        content.innerHTML = '<span style="color:#c00;">Error loading reminder settings</span>';
+    }
+}
+
+async function saveReminderPrefs() {
+    const before = document.getElementById('reminderBeforeDue');
+    const after = document.getElementById('reminderAfterDue');
+    if (!before || !after) return;
+    try {
+        const res = await apiFetch('/api/workspace/reminder-prefs', {
+            method: 'PUT',
+            body: JSON.stringify({ beforeDueDate: before.checked, afterDueDate: after.checked }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Could not save preferences');
+            return;
+        }
+        alert('Reminder preferences saved.');
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+async function sendTestReminder() {
+    try {
+        const res = await apiFetch('/api/workspace/send-test-reminder', { method: 'POST' });
+        const body = await res.json().catch(() => ({}));
+        if (res.ok) {
+            alert(body.message || 'Test email sent!');
+        } else {
+            alert(body.error || 'Test email failed.');
+        }
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+async function loadAdminReminderUsersTable() {
+    const wrap = document.getElementById('adminReminderUsersTable');
+    if (!wrap) return;
+    try {
+        const res = await apiFetch('/api/workspace/reminder-prefs/org-users');
+        if (!res.ok) { wrap.innerHTML = '<span style="color:#c00;">Could not load</span>'; return; }
+        const data = await res.json();
+        if (!data.enabled || !Array.isArray(data.users) || data.users.length === 0) {
+            wrap.innerHTML = '<span style="color:#999;">No users found</span>';
+            return;
+        }
+        const rows = data.users.map(u => `
+            <tr>
+                <td style="padding:6px 10px;">${escapeHtml(u.name)}</td>
+                <td style="padding:6px 10px;font-size:13px;color:#666;">${escapeHtml(u.email)}</td>
+                <td style="padding:6px 10px;text-align:center;"><input type="checkbox" data-uid="${u.userId}" data-field="before" ${u.beforeDueDate ? 'checked' : ''}></td>
+                <td style="padding:6px 10px;text-align:center;"><input type="checkbox" data-uid="${u.userId}" data-field="after" ${u.afterDueDate ? 'checked' : ''}></td>
+                <td style="padding:6px 10px;text-align:center;">
+                    <button type="button" class="btn btn-primary" style="padding:3px 10px;font-size:12px;" onclick="saveAdminReminderPref(${u.userId})">Save</button>
+                </td>
+            </tr>`).join('');
+        wrap.innerHTML = `
+            <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                <thead><tr style="text-align:left;border-bottom:1px solid #ddd;">
+                    <th style="padding:6px 10px;">Name</th>
+                    <th style="padding:6px 10px;">Email</th>
+                    <th style="padding:6px 10px;text-align:center;">Before Due</th>
+                    <th style="padding:6px 10px;text-align:center;">Overdue</th>
+                    <th style="padding:6px 10px;text-align:center;">Action</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    } catch (e) {
+        console.error(e);
+        wrap.innerHTML = '<span style="color:#c00;">Error loading users</span>';
+    }
+}
+
+async function saveAdminReminderPref(userId) {
+    const beforeEl = document.querySelector(`input[data-uid="${userId}"][data-field="before"]`);
+    const afterEl = document.querySelector(`input[data-uid="${userId}"][data-field="after"]`);
+    if (!beforeEl || !afterEl) return;
+    try {
+        const res = await apiFetch(`/api/workspace/reminder-prefs/${userId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ beforeDueDate: beforeEl.checked, afterDueDate: afterEl.checked }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Could not save');
+            return;
+        }
+        alert('User preference saved (admin override).');
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
     }
 }
 

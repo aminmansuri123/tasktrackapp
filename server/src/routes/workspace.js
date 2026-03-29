@@ -1,9 +1,12 @@
 const express = require('express');
 const User = require('../models/User');
 const Workspace = require('../models/Workspace');
+const ReminderPreference = require('../models/ReminderPreference');
 const { authMiddleware } = require('../middleware/auth');
 const { defaultWorkspaceData, normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
+const { isEmailEnabled, sendTestEmail } = require('../services/emailService');
+const { SMTP_CONFIGURED } = require('../config');
 const {
   syncUsersFromClientPayload,
   deleteUsersNotInPayload,
@@ -15,7 +18,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '15.1.0';
+const EXPORT_VERSION = '15.2.0';
 
 /**
  * Determine workspace tenant root for the current request.
@@ -369,6 +372,114 @@ router.patch('/shared-task', authMiddleware, async (req, res) => {
   } catch (e) {
     console.error('PATCH /shared-task error:', e);
     return res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// ── Reminder preference endpoints (only functional when SMTP is configured) ──
+
+router.get('/reminder-prefs', authMiddleware, async (req, res) => {
+  if (!SMTP_CONFIGURED) return res.json({ enabled: false });
+  try {
+    const pref = await ReminderPreference.findOne({ userId: req.user.userId }).lean();
+    return res.json({
+      enabled: true,
+      beforeDueDate: pref ? pref.beforeDueDate : true,
+      afterDueDate: pref ? pref.afterDueDate : true,
+      setByAdmin: pref ? !!pref.setByAdmin : false,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load preferences' });
+  }
+});
+
+router.put('/reminder-prefs', authMiddleware, async (req, res) => {
+  if (!SMTP_CONFIGURED) return res.json({ enabled: false });
+  try {
+    const { beforeDueDate, afterDueDate } = req.body || {};
+    const existing = await ReminderPreference.findOne({ userId: req.user.userId });
+    if (existing && existing.setByAdmin && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Your reminder preferences are managed by your admin.' });
+    }
+    await ReminderPreference.findOneAndUpdate(
+      { userId: req.user.userId },
+      { beforeDueDate: !!beforeDueDate, afterDueDate: !!afterDueDate, setByAdmin: false },
+      { upsert: true, new: true }
+    );
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to save preferences' });
+  }
+});
+
+router.put('/reminder-prefs/:userId', authMiddleware, async (req, res) => {
+  if (!SMTP_CONFIGURED) return res.json({ enabled: false });
+  if (req.user.role !== 'admin' && !req.user.isMaster) {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  try {
+    const targetUserId = parseInt(req.params.userId, 10);
+    if (Number.isNaN(targetUserId)) return res.status(400).json({ error: 'Invalid userId' });
+    const { beforeDueDate, afterDueDate } = req.body || {};
+    await ReminderPreference.findOneAndUpdate(
+      { userId: targetUserId },
+      { beforeDueDate: !!beforeDueDate, afterDueDate: !!afterDueDate, setByAdmin: true },
+      { upsert: true, new: true }
+    );
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to save preferences' });
+  }
+});
+
+router.get('/reminder-prefs/org-users', authMiddleware, async (req, res) => {
+  if (!SMTP_CONFIGURED) return res.json({ enabled: false, users: [] });
+  if (req.user.role !== 'admin' && !req.user.isMaster) {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+  try {
+    const tenantRoot = resolveTenantRoot(req);
+    if (tenantRoot == null) return res.json({ enabled: true, users: [] });
+    const users = await User.find({
+      isActive: true,
+      isMaster: { $ne: true },
+      $or: [{ tenantRootUserId: tenantRoot }, { userId: tenantRoot }],
+    }).lean();
+    const prefs = await ReminderPreference.find({
+      userId: { $in: users.map((u) => u.userId) },
+    }).lean();
+    const prefsMap = new Map(prefs.map((p) => [p.userId, p]));
+    const result = users.map((u) => {
+      const p = prefsMap.get(u.userId);
+      return {
+        userId: u.userId,
+        name: u.name,
+        email: u.email,
+        beforeDueDate: p ? p.beforeDueDate : true,
+        afterDueDate: p ? p.afterDueDate : true,
+        setByAdmin: p ? !!p.setByAdmin : false,
+      };
+    });
+    return res.json({ enabled: true, users: result });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load org preferences' });
+  }
+});
+
+router.post('/send-test-reminder', authMiddleware, async (req, res) => {
+  if (!SMTP_CONFIGURED) return res.status(400).json({ error: 'Email not configured on server.' });
+  try {
+    const user = await User.findOne({ userId: req.user.userId }).lean();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const ok = await sendTestEmail(user.email, user.name || user.email);
+    if (ok) return res.json({ ok: true, message: `Test email sent to ${user.email}` });
+    return res.status(500).json({ error: 'Email send failed. Check server SMTP settings.' });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Test email failed' });
   }
 });
 

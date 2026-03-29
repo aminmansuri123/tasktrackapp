@@ -15,6 +15,13 @@ function parseOrigins() {
   return raw.split(',').map((o) => o.trim()).filter(Boolean);
 }
 
+const SMTP_EMAIL = process.env.SMTP_EMAIL || '';
+const SMTP_PASSWORD = process.env.SMTP_PASSWORD || '';
+const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || '465', 10);
+const REMINDER_CRON = process.env.REMINDER_CRON || '0 8 * * *';
+const SMTP_CONFIGURED = !!(SMTP_EMAIL && SMTP_PASSWORD);
+
 module.exports = {
   PORT,
   JWT_SECRET,
@@ -24,4 +31,10 @@ module.exports = {
   MONGODB_URI,
   parseOrigins,
   isProduction: process.env.NODE_ENV === 'production',
+  SMTP_EMAIL,
+  SMTP_PASSWORD,
+  SMTP_HOST,
+  SMTP_PORT,
+  REMINDER_CRON,
+  SMTP_CONFIGURED,
 };

@@ -15,6 +15,7 @@ const authRoutes = require('./routes/auth');
 const workspaceRoutes = require('./routes/workspace');
 const attachmentsRoutes = require('./routes/attachments');
 const masterRoutes = require('./routes/master');
+const { startReminderCron } = require('./services/reminderCron');
 
 async function ensureMasterUser() {
   if (!MASTER_PASSWORD) {
@@ -180,6 +181,8 @@ async function main() {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   });
+
+  startReminderCron();
 
   app.listen(PORT, () => {
     console.log(`API listening on port ${PORT}`);
