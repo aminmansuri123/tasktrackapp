@@ -93,6 +93,22 @@ async function migrateLegacyTenants() {
   }
 }
 
+async function dropStaleLegacyIndexes() {
+  try {
+    const col = Workspace.collection;
+    const indexes = await col.indexes();
+    const nameIdx = indexes.find((i) => i.name === 'name_1' && i.unique === true);
+    if (nameIdx) {
+      await col.dropIndex('name_1');
+      console.log('Dropped stale unique index name_1 on workspaces collection');
+    }
+  } catch (e) {
+    if (e.codeName !== 'IndexNotFound') {
+      console.warn('dropStaleLegacyIndexes warning:', e.message);
+    }
+  }
+}
+
 async function main() {
   if (!MONGODB_URI) {
     console.error('MONGODB_URI is required');
@@ -101,6 +117,7 @@ async function main() {
 
   await mongoose.connect(MONGODB_URI);
   console.log('MongoDB connected');
+  await dropStaleLegacyIndexes();
   await ensureMasterUser();
   await migrateLegacyTenants();
 
