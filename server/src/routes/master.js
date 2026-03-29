@@ -100,6 +100,56 @@ router.post('/users', authMiddleware, requireMaster, async (req, res) => {
   }
 });
 
+router.get('/users/:userId/linked-data', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (Number.isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user' });
+    }
+    const target = await User.findOne({ userId });
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const isOrgAdmin = target.role === 'admin' && !target.isMaster;
+    const tenantRoot = target.tenantRootUserId != null ? Number(target.tenantRootUserId) : target.userId;
+    let tasksAssigned = 0;
+    let tasksCreated = 0;
+    let orgUserCount = 0;
+
+    if (isOrgAdmin && target.userId === tenantRoot) {
+      orgUserCount = await User.countDocuments({
+        isMaster: { $ne: true },
+        tenantRootUserId: tenantRoot,
+        userId: { $ne: target.userId },
+      });
+    }
+
+    const ws = await Workspace.findOne({ tenantRootUserId: tenantRoot });
+    if (ws && ws.data && Array.isArray(ws.data.tasks)) {
+      for (const t of ws.data.tasks) {
+        if (Number(t.assigned_to) === userId) tasksAssigned++;
+        if (Number(t.created_by) === userId) tasksCreated++;
+      }
+    }
+
+    return res.json({
+      userId,
+      name: target.name,
+      email: target.email,
+      role: target.role,
+      isOrgAdmin,
+      isOrgOwner: isOrgAdmin && target.userId === tenantRoot,
+      orgUserCount,
+      tasksAssigned,
+      tasksCreated,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to check linked data' });
+  }
+});
+
 router.delete('/users/:userId', authMiddleware, requireMaster, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId, 10);
@@ -113,7 +163,40 @@ router.delete('/users/:userId', authMiddleware, requireMaster, async (req, res) 
     if (target.isMaster) {
       return res.status(403).json({ error: 'Cannot delete master account' });
     }
+
+    const tenantRoot = target.tenantRootUserId != null ? Number(target.tenantRootUserId) : target.userId;
+    const isOrgOwner = target.role === 'admin' && target.userId === tenantRoot;
+
+    const ws = await Workspace.findOne({ tenantRootUserId: tenantRoot });
+    if (ws && ws.data && Array.isArray(ws.data.tasks)) {
+      ws.data.tasks = ws.data.tasks.filter(
+        (t) => Number(t.assigned_to) !== userId && Number(t.created_by) !== userId
+      );
+      if (Array.isArray(ws.data.users)) {
+        ws.data.users = ws.data.users.filter((u) => Number(u.id) !== userId);
+      }
+      ws.markModified('data');
+      await ws.save();
+    }
+
+    if (isOrgOwner) {
+      const linkedUsers = await User.find({
+        isMaster: { $ne: true },
+        tenantRootUserId: tenantRoot,
+        userId: { $ne: userId },
+      });
+      for (const lu of linkedUsers) {
+        await User.deleteOne({ _id: lu._id });
+      }
+      if (ws) {
+        await Workspace.deleteOne({ _id: ws._id });
+      }
+    }
+
     await User.deleteOne({ userId });
+    if (!isOrgOwner) {
+      await reconcileWorkspaceEmbeddedUsersForTenant(tenantRoot);
+    }
     return res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -260,6 +343,31 @@ router.post('/users/:userId/active', authMiddleware, requireMaster, async (req, 
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+const VALID_FEATURES = ['locations', 'codeSnippets'];
+
+router.patch('/users/:userId/features', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (Number.isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user' });
+    }
+    const target = await User.findOne({ userId });
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const { enabledFeatures } = req.body || {};
+    if (!Array.isArray(enabledFeatures)) {
+      return res.status(400).json({ error: 'enabledFeatures must be an array' });
+    }
+    target.enabledFeatures = enabledFeatures.filter((f) => VALID_FEATURES.includes(f));
+    await target.save();
+    return res.json({ ok: true, enabledFeatures: target.enabledFeatures });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Feature update failed' });
   }
 });
 

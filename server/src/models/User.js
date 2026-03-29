@@ -11,6 +11,8 @@ const userSchema = new mongoose.Schema(
     isMaster: { type: Boolean, default: false },
     /** Org root admin userId; null for master account only. All tenant members share the same value. */
     tenantRootUserId: { type: Number, default: null, index: true },
+    /** Feature flags toggled by master: 'locations', 'codeSnippets' */
+    enabledFeatures: { type: [String], default: [] },
   },
   { timestamps: true }
 );

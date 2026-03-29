@@ -18,7 +18,6 @@ function cookieOptions() {
     httpOnly: true,
     secure: isProduction,
     sameSite: isProduction ? 'none' : 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
     path: '/',
   };
 }
@@ -31,6 +30,7 @@ function publicUser(u) {
     role: u.role,
     is_active: u.isActive,
     isMaster: u.isMaster,
+    enabledFeatures: Array.isArray(u.enabledFeatures) ? u.enabledFeatures : [],
   };
 }
 

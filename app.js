@@ -1,4 +1,4 @@
-const APP_VERSION = '12.1.1';
+const APP_VERSION = '15.0.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -9,11 +9,12 @@ const API_AUTH_TOKEN_KEY = 'tasktrack_api_auth_token';
 
 function setApiAuthToken(token) {
     if (token && typeof token === 'string') {
-        localStorage.setItem(API_AUTH_TOKEN_KEY, token);
+        sessionStorage.setItem(API_AUTH_TOKEN_KEY, token);
     }
 }
 
 function clearApiAuthToken() {
+    sessionStorage.removeItem(API_AUTH_TOKEN_KEY);
     localStorage.removeItem(API_AUTH_TOKEN_KEY);
 }
 
@@ -77,7 +78,7 @@ async function apiFetch(path, options = {}) {
     if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json';
     }
-    const bearer = localStorage.getItem(API_AUTH_TOKEN_KEY);
+    const bearer = sessionStorage.getItem(API_AUTH_TOKEN_KEY) || localStorage.getItem(API_AUTH_TOKEN_KEY);
     if (bearer && !headers.Authorization) {
         headers.Authorization = `Bearer ${bearer}`;
     }
@@ -96,6 +97,7 @@ async function apiPullWorkspace() {
         console.log('[workspace _debug]', JSON.stringify(body._debug));
     }
     __workspaceCache = normalizeData(body);
+    applyFeatureTabVisibility();
 }
 
 function scheduleWorkspacePush() {
@@ -702,7 +704,7 @@ function getNextTaskNumberFromData(data) {
 
 // Authentication
 function checkAuth() {
-    const user = localStorage.getItem('currentUser');
+    const user = sessionStorage.getItem('currentUser');
     document.body.classList.remove('user-admin');
     document.body.classList.toggle('app-api-mode', isApiMode());
     const masterHint = document.getElementById('masterToolsHint');
@@ -725,6 +727,7 @@ function checkAuth() {
         }
         const cpBtn = document.getElementById('changePasswordBtn');
         if (cpBtn) cpBtn.style.display = isApiMode() ? 'inline-block' : 'none';
+        applyFeatureTabVisibility();
     } else {
         currentUser = null;
         document.body.classList.toggle('app-api-mode', isApiMode());
@@ -938,7 +941,7 @@ async function login() {
                         console.error(meParse);
                         throw meParse;
                     }
-                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
                     try {
                         await apiPullWorkspace();
                     } catch (pullErr) {
@@ -964,7 +967,7 @@ async function login() {
         }
         currentUser = body.user;
         if (body.token) setApiAuthToken(body.token);
-        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
             await apiPullWorkspace();
         } catch (pullErr) {
@@ -997,7 +1000,7 @@ async function login() {
 
     currentUser = { ...user };
     delete currentUser.password;
-    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+    sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
     const lp = document.getElementById('loginPassword');
     if (lp) lp.value = '';
     checkAuth();
@@ -1075,7 +1078,7 @@ async function register() {
                         console.error(meParse);
                         throw meParse;
                     }
-                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
                     try {
                         await apiPullWorkspace();
                     } catch (pullErr) {
@@ -1101,7 +1104,7 @@ async function register() {
         }
         currentUser = body.user;
         if (body.token) setApiAuthToken(body.token);
-        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
             await apiPullWorkspace();
         } catch (pullErr) {
@@ -1159,7 +1162,7 @@ async function register() {
 
     currentUser = { ...newUser };
     delete currentUser.password;
-    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+    sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
     const lp = document.getElementById('loginPassword');
     if (lp) lp.value = '';
     checkAuth();
@@ -1236,7 +1239,7 @@ async function logout() {
         clearPendingPasswordsForSync();
     }
     clearApiAuthToken();
-    localStorage.removeItem('currentUser');
+    sessionStorage.removeItem('currentUser');
     currentUser = null;
     document.body.classList.remove('user-admin');
     checkAuth();
@@ -1267,12 +1270,38 @@ function clearLoginFormError() {
     if (el) el.innerHTML = '';
 }
 
+function currentUserFeatures() {
+    if (!currentUser) return [];
+    if (currentUser.isMaster) return ['locations', 'codeSnippets'];
+    if (Array.isArray(currentUser.enabledFeatures) && currentUser.enabledFeatures.length > 0) {
+        return currentUser.enabledFeatures;
+    }
+    const data = typeof __workspaceCache === 'object' && __workspaceCache ? __workspaceCache : null;
+    if (data && Array.isArray(data.users)) {
+        const me = data.users.find(u => Number(u.id) === Number(currentUser.id));
+        if (me && Array.isArray(me.enabledFeatures)) return me.enabledFeatures;
+    }
+    return [];
+}
+
+function applyFeatureTabVisibility() {
+    const feats = currentUserFeatures();
+    const locBtn = document.getElementById('navTabLocations');
+    const snipBtn = document.getElementById('navTabSnippets');
+    if (locBtn) locBtn.style.display = feats.includes('locations') ? '' : 'none';
+    if (snipBtn) snipBtn.style.display = feats.includes('codeSnippets') ? '' : 'none';
+}
+
 // Tab Navigation
 function switchTab(tabName, eventElement, skipAutoRender = false) {
     const canSettings = currentUser && (currentUser.role === 'admin' || currentUser.isMaster);
     if (tabName === 'settings' && !canSettings) {
         return;
     }
+    const feats = currentUserFeatures();
+    if (tabName === 'locations' && !feats.includes('locations')) return;
+    if (tabName === 'snippets' && !feats.includes('codeSnippets')) return;
+
     document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
 
@@ -5705,7 +5734,7 @@ function renderSettings() {
                 </div>
                 <div class="form-group">
                     <label>User to manage (for actions 3–5)</label>
-                    <select id="masterManageUserId" class="form-control" style="max-width:100%;">
+                    <select id="masterManageUserId" class="form-control" style="max-width:100%;" onchange="masterHydrateFeatureCheckboxes()">
                         <option value="">Select user…</option>${nonMasterUserOpts}
                     </select>
                 </div>
@@ -5720,6 +5749,15 @@ function renderSettings() {
                         <option value="">5 — Move to account admin…</option>${orgAdminOptsForMaster}
                     </select>
                     <button type="button" class="btn btn-secondary" onclick="masterApiMoveUserOrg()">Apply org</button>
+                </div>
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label>6 — Assign features (select user above first)</label>
+                    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-top:6px;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="masterFeatureLocations"> Locations tab</label>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="masterFeatureCodeSnippets"> Code Snippets tab</label>
+                        <button type="button" class="btn btn-primary" style="padding:4px 14px;font-size:13px;" onclick="masterApiSaveFeatures()">Save features</button>
+                    </div>
+                    <p style="color:#666;font-size:12px;margin-top:4px;">These tabs are hidden by default. Check the boxes to enable for the selected user.</p>
                 </div>
                 <hr style="margin:28px 0;border:none;border-top:1px solid #e5e5e5;">
                 <h3>Master password reset</h3>
@@ -5956,15 +5994,34 @@ async function masterApiDeleteUser() {
         alert('Select a user.');
         return;
     }
-    if (!confirm('Permanently delete this user from the server? This cannot be undone.')) return;
     try {
+        const infoRes = await apiFetch(`/api/master/users/${uid}/linked-data`);
+        if (!infoRes.ok) {
+            alert('Could not check linked data. Try again.');
+            return;
+        }
+        const info = await infoRes.json();
+        const lines = [`Delete "${info.name}" (${info.email})?`];
+        let hasData = false;
+        if (info.tasksAssigned > 0) { lines.push(`• ${info.tasksAssigned} task(s) assigned to this user will be removed`); hasData = true; }
+        if (info.tasksCreated > 0) { lines.push(`• ${info.tasksCreated} task(s) created by this user will be removed`); hasData = true; }
+        if (info.isOrgOwner && info.orgUserCount > 0) {
+            lines.push(`• This is an org admin with ${info.orgUserCount} linked user(s) — they will ALL be deleted along with the entire workspace`);
+            hasData = true;
+        }
+        if (hasData) {
+            lines.push('', 'WARNING: All linked data will be permanently removed.');
+        }
+        lines.push('', 'This cannot be undone. Proceed?');
+        if (!confirm(lines.join('\n'))) return;
+
         const res = await apiFetch(`/api/master/users/${uid}`, { method: 'DELETE' });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             alert(err.error || 'Delete failed');
             return;
         }
-        alert('User deleted.');
+        alert('User and all linked data deleted.');
         await masterRefreshAfterUserChange();
     } catch (e) {
         console.error(e);
@@ -6029,6 +6086,53 @@ async function masterApiMoveUserOrg() {
             return;
         }
         alert('User moved under that account admin.');
+        await masterRefreshAfterUserChange();
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+function masterHydrateFeatureCheckboxes() {
+    const sel = document.getElementById('masterManageUserId');
+    const uid = sel ? parseInt(sel.value, 10) : NaN;
+    const locCb = document.getElementById('masterFeatureLocations');
+    const snipCb = document.getElementById('masterFeatureCodeSnippets');
+    if (!locCb || !snipCb) return;
+    if (Number.isNaN(uid) || uid <= 0) {
+        locCb.checked = false;
+        snipCb.checked = false;
+        return;
+    }
+    const data = getData();
+    const user = (data.users || []).find(u => Number(u.id) === uid);
+    const feats = (user && Array.isArray(user.enabledFeatures)) ? user.enabledFeatures : [];
+    locCb.checked = feats.includes('locations');
+    snipCb.checked = feats.includes('codeSnippets');
+}
+
+async function masterApiSaveFeatures() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const sel = document.getElementById('masterManageUserId');
+    const uid = sel ? parseInt(sel.value, 10) : NaN;
+    if (Number.isNaN(uid) || uid <= 0) {
+        alert('Select a user first.');
+        return;
+    }
+    const feats = [];
+    if (document.getElementById('masterFeatureLocations') && document.getElementById('masterFeatureLocations').checked) feats.push('locations');
+    if (document.getElementById('masterFeatureCodeSnippets') && document.getElementById('masterFeatureCodeSnippets').checked) feats.push('codeSnippets');
+    try {
+        const res = await apiFetch(`/api/master/users/${uid}/features`, {
+            method: 'PATCH',
+            body: JSON.stringify({ enabledFeatures: feats }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Feature update failed');
+            return;
+        }
+        alert('Features updated.');
         await masterRefreshAfterUserChange();
     } catch (e) {
         console.error(e);
@@ -7062,7 +7166,7 @@ function importAllData(event) {
                     }
                 }
 
-                localStorage.removeItem('currentUser');
+                sessionStorage.removeItem('currentUser');
                 currentUser = null;
                 if (isApiMode()) __workspaceCache = null;
 
@@ -7220,7 +7324,7 @@ function confirmClearAllData() {
     };
 
     saveData(defaultData);
-    localStorage.removeItem('currentUser');
+    sessionStorage.removeItem('currentUser');
     localStorage.removeItem('todoAppAutoBackup');
     localStorage.removeItem('autoExportEnabled');
 
@@ -10398,7 +10502,7 @@ async function bootstrapApp() {
             currentUser = null;
             __workspaceCache = null;
             clearApiAuthToken();
-            localStorage.removeItem('currentUser');
+            sessionStorage.removeItem('currentUser');
             checkAuth();
             init();
             return;
@@ -10411,13 +10515,13 @@ async function bootstrapApp() {
                 console.warn('Bootstrap /me parse failed', parseErr);
                 currentUser = null;
                 clearApiAuthToken();
-                localStorage.removeItem('currentUser');
+                sessionStorage.removeItem('currentUser');
                 __workspaceCache = null;
                 checkAuth();
                 init();
                 return;
             }
-            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
             try {
                 await apiPullWorkspace();
             } catch (pullErr) {
@@ -10427,7 +10531,7 @@ async function bootstrapApp() {
         } else {
             currentUser = null;
             clearApiAuthToken();
-            localStorage.removeItem('currentUser');
+            sessionStorage.removeItem('currentUser');
             __workspaceCache = null;
         }
     } finally {

@@ -35,6 +35,7 @@ async function usersToClientShapeForTenant(tenantRootUserId) {
     role: u.role,
     is_active: u.isActive,
     isMaster: u.isMaster,
+    enabledFeatures: Array.isArray(u.enabledFeatures) ? u.enabledFeatures : [],
   }));
 }
 
@@ -70,6 +71,7 @@ async function usersToClientShapeAll() {
       tenantRootUserId: u.tenantRootUserId,
       tenant_admin_root_id: adminRoot,
       tenant_admin_label: tenantAdminLabel,
+      enabledFeatures: Array.isArray(u.enabledFeatures) ? u.enabledFeatures : [],
     };
   });
 }

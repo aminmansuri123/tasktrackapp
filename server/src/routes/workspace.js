@@ -15,7 +15,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '12.1.1';
+const EXPORT_VERSION = '15.0.0';
 
 /**
  * Determine workspace tenant root for the current request.
@@ -53,6 +53,7 @@ async function loadTenantUsers(tenantRoot, currentUserId) {
           role: doc.role,
           is_active: doc.isActive,
           isMaster: doc.isMaster,
+          enabledFeatures: Array.isArray(doc.enabledFeatures) ? doc.enabledFeatures : [],
         });
       }
     } catch (e) {
