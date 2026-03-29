@@ -1,5 +1,10 @@
+const dns = require('dns');
 const nodemailer = require('nodemailer');
 const { SMTP_EMAIL, SMTP_PASSWORD, SMTP_HOST, SMTP_PORT, SMTP_CONFIGURED } = require('../config');
+
+// Force IPv4 DNS resolution — many cloud providers (Render, Railway, etc.)
+// don't support outbound IPv6, causing ENETUNREACH errors with Gmail SMTP.
+dns.setDefaultResultOrder('ipv4first');
 
 function isEmailEnabled() {
   return SMTP_CONFIGURED;
@@ -162,26 +167,21 @@ async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate
 }
 
 async function sendTestEmail(toEmail, userName) {
-  if (!isEmailEnabled()) return false;
+  if (!isEmailEnabled()) throw new Error('SMTP not configured');
   const transporter = getTransporter();
-  if (!transporter) return false;
+  if (!transporter) throw new Error('Could not create email transporter');
   const demoTask = {
     title: 'Sample Task — Test Reminder',
     due_date: new Date().toISOString().split('T')[0],
     status: 'in_progress',
   };
-  try {
-    await transporter.sendMail({
-      from: `"Task Tracker" <${SMTP_EMAIL}>`,
-      to: toEmail,
-      subject: 'Test Email — Task Tracker Reminder',
-      html: buildReminderHtml(userName, [], [demoTask]),
-    });
-    return true;
-  } catch (err) {
-    console.error(`Test email send failed for ${toEmail}:`, err.message);
-    return false;
-  }
+  await transporter.sendMail({
+    from: `"Task Tracker" <${SMTP_EMAIL}>`,
+    to: toEmail,
+    subject: 'Test Email — Task Tracker Reminder',
+    html: buildReminderHtml(userName, [], [demoTask]),
+  });
+  return true;
 }
 
 module.exports = { isEmailEnabled, sendTaskReminderEmail, sendTaskAssignmentEmail, sendTestEmail };

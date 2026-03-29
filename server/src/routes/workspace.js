@@ -525,12 +525,12 @@ router.post('/send-test-reminder', authMiddleware, async (req, res) => {
   try {
     const user = await User.findOne({ userId: req.user.userId }).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
-    const ok = await sendTestEmail(user.email, user.name || user.email);
-    if (ok) return res.json({ ok: true, message: `Test email sent successfully to ${user.email}. Check your inbox (and spam folder).` });
-    return res.status(500).json({ error: 'Email send failed. Check server logs and verify SMTP credentials (SMTP_EMAIL, SMTP_PASSWORD, SMTP_HOST, SMTP_PORT).' });
+    await sendTestEmail(user.email, user.name || user.email);
+    return res.json({ ok: true, message: `Test email sent successfully to ${user.email}. Check your inbox (and spam folder).` });
   } catch (e) {
-    console.error('send-test-reminder error:', e);
-    return res.status(500).json({ error: `Test email failed: ${e.message || 'Unknown error'}. Check server SMTP settings.` });
+    console.error('send-test-reminder error:', e.message || e);
+    const detail = e.message || 'Unknown error';
+    return res.status(500).json({ error: `Test email failed: ${detail}` });
   }
 });
 
