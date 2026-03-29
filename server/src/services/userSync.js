@@ -41,15 +41,37 @@ async function usersToClientShapeForTenant(tenantRootUserId) {
 /** All accounts (for master password tools). */
 async function usersToClientShapeAll() {
   const list = await User.find().sort({ userId: 1 }).lean();
-  return list.map((u) => ({
-    id: u.userId,
-    email: u.email,
-    name: u.name,
-    role: u.role,
-    is_active: u.isActive,
-    isMaster: u.isMaster,
-    tenantRootUserId: u.tenantRootUserId,
-  }));
+  const byId = new Map(list.map((u) => [u.userId, u]));
+  return list.map((u) => {
+    let adminRoot = null;
+    if (u.isMaster) {
+      adminRoot = null;
+    } else if (u.tenantRootUserId != null && u.tenantRootUserId !== '' && !Number.isNaN(Number(u.tenantRootUserId))) {
+      adminRoot = Number(u.tenantRootUserId);
+    } else if (u.role === 'admin') {
+      adminRoot = u.userId;
+    }
+    const rootUser = adminRoot != null ? byId.get(adminRoot) : null;
+    let tenantAdminLabel = '—';
+    if (u.isMaster) {
+      tenantAdminLabel = '—';
+    } else if (adminRoot != null) {
+      tenantAdminLabel = rootUser
+        ? `${rootUser.name || ''} (${rootUser.email || ''})`.trim() || `Account admin ID ${adminRoot}`
+        : `Org root ${adminRoot}`;
+    }
+    return {
+      id: u.userId,
+      email: u.email,
+      name: u.name,
+      role: u.role,
+      is_active: u.isActive,
+      isMaster: u.isMaster,
+      tenantRootUserId: u.tenantRootUserId,
+      tenant_admin_root_id: adminRoot,
+      tenant_admin_label: tenantAdminLabel,
+    };
+  });
 }
 
 async function syncUsersFromClientPayload(usersPayload, { isAdmin, tenantRootUserId }) {
@@ -68,7 +90,17 @@ async function syncUsersFromClientPayload(usersPayload, { isAdmin, tenantRootUse
 
     if (existing) {
       if (existing.isMaster) continue;
-      if (existing.tenantRootUserId != null && existing.tenantRootUserId !== tenantRootUserId) {
+      const exRoot =
+        existing.tenantRootUserId != null && existing.tenantRootUserId !== ''
+          ? Number(existing.tenantRootUserId)
+          : null;
+      const tRoot = Number(tenantRootUserId);
+      if (
+        exRoot != null &&
+        Number.isFinite(exRoot) &&
+        Number.isFinite(tRoot) &&
+        exRoot !== tRoot
+      ) {
         continue;
       }
       const emailTaken = await User.findOne({ email, userId: { $ne: existing.userId } });
@@ -167,6 +199,29 @@ function previousWorkspaceUserIdSet(usersArray) {
 }
 
 /**
+ * Merges client user payload with Mongo tenant roster so users never on the persisted workspace
+ * snapshot (e.g. master-moved or self-registered) are not dropped from the next admin PUT/delete pass.
+ */
+async function mergeIncomingUsersWithDbTenantRoster(incomingUsers, tenantRootUserId, previousWorkspaceUserIds) {
+  const incoming = Array.isArray(incomingUsers) ? [...incomingUsers] : [];
+  const prev = previousWorkspaceUserIds instanceof Set ? previousWorkspaceUserIds : new Set();
+  const dbRoster = await usersToClientShapeForTenant(tenantRootUserId);
+  const incomingIds = new Set();
+  for (const u of incoming) {
+    const id = coerceTenantUserId(u && u.id);
+    if (id != null) incomingIds.add(id);
+  }
+  for (const du of dbRoster) {
+    if (incomingIds.has(du.id)) continue;
+    if (!prev.has(du.id)) {
+      incoming.push({ ...du });
+      incomingIds.add(du.id);
+    }
+  }
+  return incoming;
+}
+
+/**
  * @param {Set<number>|null|undefined} previousWorkspaceUserIds - When replaceAllTenantUsers is false,
  *   only delete Mongo users who were listed on the persisted workspace roster and are now missing
  *   from the client payload (avoids wiping self-registered account users the admin UI never saved).
@@ -195,7 +250,11 @@ async function deleteUsersNotInPayload(
 
   allowed.add(tenantRootUserId);
 
-  const all = await User.find({ tenantRootUserId });
+  const root = Number(tenantRootUserId);
+  const all = await User.find({
+    isMaster: { $ne: true },
+    $or: [{ tenantRootUserId: root }, { userId: root }],
+  });
   for (const u of all) {
     if (u.isMaster) continue;
     if (u.userId === tenantRootUserId) continue;
@@ -224,4 +283,5 @@ module.exports = {
   allocateUniqueUserId,
   coerceTenantUserId,
   previousWorkspaceUserIdSet,
+  mergeIncomingUsersWithDbTenantRoster,
 };

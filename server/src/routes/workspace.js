@@ -10,11 +10,12 @@ const {
   usersToClientShapeForTenant,
   usersToClientShapeAll,
   previousWorkspaceUserIdSet,
+  mergeIncomingUsersWithDbTenantRoster,
 } = require('../services/userSync');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '12.0.8';
+const EXPORT_VERSION = '12.0.9';
 
 function resolveTenantRoot(req) {
   if (req.user.isMaster) return null;
@@ -149,12 +150,16 @@ router.put('/', authMiddleware, async (req, res) => {
       merged.segregationTypes = existingNormalized.segregationTypes;
       merged.holidays = existingNormalized.holidays;
     } else {
-      const incomingUsers = incoming.users;
       const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
-      await syncUsersFromClientPayload(incomingUsers, { isAdmin: true, tenantRootUserId: tenantRoot });
-      if (Array.isArray(incomingUsers) && incomingUsers.length > 0) {
+      const incomingUsersMerged = await mergeIncomingUsersWithDbTenantRoster(
+        incoming.users,
+        tenantRoot,
+        previousUserIds
+      );
+      await syncUsersFromClientPayload(incomingUsersMerged, { isAdmin: true, tenantRootUserId: tenantRoot });
+      if (Array.isArray(incomingUsersMerged) && incomingUsersMerged.length > 0) {
         await deleteUsersNotInPayload(
-          incomingUsers.map((u) => u.id),
+          incomingUsersMerged.map((u) => u.id),
           tenantRoot,
           previousUserIds,
           false

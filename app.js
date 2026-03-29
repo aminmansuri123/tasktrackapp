@@ -1,4 +1,4 @@
-const APP_VERSION = '12.0.8';
+const APP_VERSION = '12.0.9';
 
 let __loginErrorDismissTimer = null;
 
@@ -392,6 +392,23 @@ function isMasterUserRecord(u) {
     if (u.isMaster === true) return true;
     const em = (u.email || '').toLowerCase();
     return em === MASTER_ACCOUNT_EMAIL;
+}
+
+/** Master Settings: filter dropdown for User Management + account status table. */
+function getMasterAccountFilterMode() {
+    const wrap = document.getElementById('masterUserMgmtFilterWrap');
+    const filt = document.getElementById('masterUserStatusFilter');
+    if (!filt || (wrap && wrap.classList.contains('hidden'))) return 'all';
+    const v = filt.value;
+    return v === 'active' || v === 'disabled' ? v : 'all';
+}
+
+function userPassesMasterAccountFilter(u, mode) {
+    if (!u) return false;
+    if (u.isMaster === true) return true;
+    if (mode === 'active') return u.is_active !== false;
+    if (mode === 'disabled') return u.is_active === false;
+    return true;
 }
 
 /** Users shown in assignee / filter dropdowns (hides master for non-admin users). */
@@ -5422,21 +5439,52 @@ function renderUsers() {
 
     const data = getData();
     const masterReadOnly = isApiMode() && currentUser.isMaster;
-    const html = data.users.map(user => `
+    const filterWrap = document.getElementById('masterUserMgmtFilterWrap');
+    const filt = document.getElementById('masterUserStatusFilter');
+    if (filterWrap) {
+        filterWrap.classList.toggle('hidden', !masterReadOnly);
+    }
+    if (filt && masterReadOnly && filt.getAttribute('data-wired') !== '1') {
+        filt.setAttribute('data-wired', '1');
+        filt.addEventListener('change', () => renderSettings());
+    }
+
+    const headRow = document.getElementById('userMgmtTableHeadRow');
+    if (headRow) {
+        if (masterReadOnly) {
+            headRow.innerHTML = '<th>Name</th><th>Email</th><th>Role</th><th>Assigned org (account admin)</th><th>Status</th><th>Actions</th>';
+        } else {
+            headRow.innerHTML = '<th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th>';
+        }
+    }
+
+    const mode = masterReadOnly ? getMasterAccountFilterMode() : 'all';
+    const listUsers = masterReadOnly
+        ? (data.users || []).filter(u => userPassesMasterAccountFilter(u, mode))
+        : (data.users || []);
+
+    const colCount = masterReadOnly ? 6 : 5;
+    const html = listUsers.map(user => {
+        const active = user.is_active !== false;
+        const tenantTd = masterReadOnly
+            ? `<td>${escapeHtml(user.tenant_admin_label != null && user.tenant_admin_label !== '' ? user.tenant_admin_label : '—')}</td>`
+            : '';
+        return `
         <tr>
             <td>${escapeHtml(user.name)}</td>
             <td>${escapeHtml(user.email)}</td>
             <td><span class="badge ${user.role === 'admin' ? 'badge-high' : 'badge-low'}">${user.role}</span></td>
-            <td><span class="badge ${user.is_active ? 'badge-completed' : 'badge-pending'}">${user.is_active ? 'Active' : 'Disabled'}</span></td>
+            ${tenantTd}
+            <td><span class="badge ${active ? 'badge-completed' : 'badge-pending'}">${active ? 'Active' : 'Disabled'}</span></td>
             <td>${masterReadOnly
         ? '<span style="color:#888;font-size:12px;">Use Master password reset below</span>'
         : `<button type="button" class="btn btn-primary" onclick="editUser(${user.id})" style="padding: 5px 10px; font-size: 12px;">Edit</button>
                 ${user.id !== currentUser.id ? `<button type="button" class="btn btn-danger" onclick="deleteUser(${user.id})" style="padding: 5px 10px; font-size: 12px;">Delete</button>` : ''}`}
             </td>
-        </tr>
-    `).join('');
+        </tr>`;
+    }).join('');
 
-    document.getElementById('usersList').innerHTML = html || '<tr><td colspan="5" style="text-align: center;">No users</td></tr>';
+    document.getElementById('usersList').innerHTML = html || `<tr><td colspan="${colCount}" style="text-align: center;">No users</td></tr>`;
 
     const addBtn = document.getElementById('settingsAddUserBtn');
     if (addBtn) {
@@ -5584,16 +5632,20 @@ function renderSettings() {
                     `<option value="${u.id}">${escapeHtml(u.name)} (${escapeHtml(u.email)}) — ${escapeHtml(u.role || 'user')}</option>`
                 )
                 .join('');
+            const mf = getMasterAccountFilterMode();
             const accountRows = (data.users || [])
                 .filter(u => !isMasterUserRecord(u))
+                .filter(u => userPassesMasterAccountFilter(u, mf))
                 .map(u => {
                     const active = u.is_active !== false;
                     const safeName = escapeHtml(u.name || '');
                     const safeEmail = escapeHtml(u.email || '');
+                    const safeOrg = escapeHtml(u.tenant_admin_label || '—');
                     return `
                     <tr>
                         <td style="padding:8px 10px;">${safeName}</td>
                         <td style="padding:8px 10px;color:#666;font-size:13px;">${safeEmail}</td>
+                        <td style="padding:8px 10px;color:#555;font-size:13px;">${safeOrg}</td>
                         <td style="padding:8px 10px;"><span class="badge ${active ? 'badge-completed' : 'badge-pending'}">${active ? 'Active' : 'Disabled'}</span></td>
                         <td style="padding:8px 10px;">
                             ${active
@@ -5675,11 +5727,11 @@ function renderSettings() {
                     <button type="button" class="btn btn-primary" onclick="masterResetUserPassword()">Update password</button>
                 </div>
                 <h3 style="margin-top:24px;">Activate / deactivate accounts</h3>
-                <p style="color:#666;font-size:13px;">Deactivate prevents sign-in for that user (master account cannot be changed). Reactivate to restore access.</p>
+                <p style="color:#666;font-size:13px;">Deactivate prevents sign-in for that user (master account cannot be changed). Reactivate to restore access. This table uses the same <strong>Show accounts</strong> filter as User Management above.</p>
                 <div style="overflow-x:auto;margin-top:10px;">
                     <table style="width:100%;border-collapse:collapse;font-size:14px;">
-                        <thead><tr style="text-align:left;border-bottom:1px solid #ddd;"><th style="padding:8px 10px;">Name</th><th style="padding:8px 10px;">Email</th><th style="padding:8px 10px;">Status</th><th style="padding:8px 10px;">Action</th></tr></thead>
-                        <tbody>${accountRows || '<tr><td colspan="4" style="padding:12px;color:#999;">No users</td></tr>'}</tbody>
+                        <thead><tr style="text-align:left;border-bottom:1px solid #ddd;"><th style="padding:8px 10px;">Name</th><th style="padding:8px 10px;">Email</th><th style="padding:8px 10px;">Assigned org (account admin)</th><th style="padding:8px 10px;">Status</th><th style="padding:8px 10px;">Action</th></tr></thead>
+                        <tbody>${accountRows || '<tr><td colspan="5" style="padding:12px;color:#999;">No users</td></tr>'}</tbody>
                     </table>
                 </div>
             `;

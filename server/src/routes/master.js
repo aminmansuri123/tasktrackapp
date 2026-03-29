@@ -13,6 +13,20 @@ const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 
 const router = express.Router();
 
+/** Keeps workspace `data.users` aligned with the User collection after org moves. */
+async function reconcileWorkspaceEmbeddedUsersForTenant(tenantRootUserId) {
+  const root = Number(tenantRootUserId);
+  if (!Number.isFinite(root)) return;
+  await ensureWorkspaceForTenantRoot(root);
+  const ws = await Workspace.findOne({ tenantRootUserId: root });
+  if (!ws) return;
+  const normalized = normalizeWorkspacePayload(ws.data);
+  normalized.users = await usersToClientShapeForTenant(root);
+  ws.data = normalized;
+  ws.markModified('data');
+  await ws.save();
+}
+
 function masterUserSummary(doc) {
   return {
     id: doc.userId,
@@ -120,6 +134,14 @@ router.patch('/users/:userId', authMiddleware, requireMaster, async (req, res) =
     }
 
     const { role, orgAdminUserId } = req.body || {};
+    let oldTenantRoot = null;
+    if (orgAdminUserId !== undefined && orgAdminUserId !== null && orgAdminUserId !== '') {
+      const tr = target.tenantRootUserId;
+      if (tr != null && tr !== '' && !Number.isNaN(Number(tr))) {
+        oldTenantRoot = Number(tr);
+      }
+    }
+
     if (role === 'admin' || role === 'user') {
       target.role = role;
     }
@@ -138,6 +160,21 @@ router.patch('/users/:userId', authMiddleware, requireMaster, async (req, res) =
     }
 
     await target.save();
+
+    if (orgAdminUserId !== undefined && orgAdminUserId !== null && orgAdminUserId !== '') {
+      const newRootRaw = target.tenantRootUserId;
+      const newRoot =
+        newRootRaw != null && newRootRaw !== '' && !Number.isNaN(Number(newRootRaw))
+          ? Number(newRootRaw)
+          : null;
+      const roots = new Set();
+      if (oldTenantRoot != null && Number.isFinite(oldTenantRoot)) roots.add(oldTenantRoot);
+      if (newRoot != null && Number.isFinite(newRoot)) roots.add(newRoot);
+      for (const r of roots) {
+        await reconcileWorkspaceEmbeddedUsersForTenant(r);
+      }
+    }
+
     return res.json({ ok: true, user: masterUserSummary(target) });
   } catch (e) {
     console.error(e);

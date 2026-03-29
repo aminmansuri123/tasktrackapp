@@ -2070,9 +2070,18 @@
                         <span class="storage-hint-cloud"><strong>How accounts work:</strong> “Create account” can register an <strong>account admin</strong> (new workspace) or an <strong>account user</strong> under an existing admin. Admins assign tasks to users in your org list. Regular users only assign tasks to themselves.</span>
                         <span class="storage-hint-local"><strong>Local mode:</strong> Without an API URL in <code>config.js</code>, data stays in this browser. Use “Create account” for a local admin, then add users here.</span>
                     </p>
+                    <div id="masterUserMgmtFilterWrap" class="form-group hidden" style="margin-bottom:12px;">
+                        <label for="masterUserStatusFilter" style="margin-right:8px;">Show accounts</label>
+                        <select id="masterUserStatusFilter" class="form-control" style="max-width:320px;display:inline-block;">
+                            <option value="all">All (active and disabled)</option>
+                            <option value="active">Active only</option>
+                            <option value="disabled">Disabled only</option>
+                        </select>
+                        <span style="color:#666;font-size:13px;margin-left:10px;">Disabled users are listed under <strong>All</strong> or <strong>Disabled only</strong> (they stay linked to their admin).</span>
+                    </div>
                     <table class="table">
                         <thead>
-                            <tr>
+                            <tr id="userMgmtTableHeadRow">
                                 <th>Name</th>
                                 <th>Email</th>
                                 <th>Role</th>
