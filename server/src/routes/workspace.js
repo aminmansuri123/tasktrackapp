@@ -21,6 +21,8 @@ const {
   previousWorkspaceUserIdSet,
   mergeIncomingUsersWithDbTenantRoster,
 } = require('../services/userSync');
+const { validateBody } = require('../middleware/validateBody');
+const { workspacePutSchema, parseWorkspaceRestoreBody } = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -187,11 +189,11 @@ router.post('/restore', authMiddleware, async (req, res) => {
     }
     const tenantRoot = resolveTenantRoot(req);
     const body = req.body || {};
-    const imported = body.data || body;
-    if (!imported || typeof imported !== 'object') {
-      return res.status(400).json({ error: 'Invalid backup payload' });
+    const restored = parseWorkspaceRestoreBody(body);
+    if (!restored.ok) {
+      return res.status(400).json({ error: 'Invalid backup payload', details: restored.details });
     }
-    const complete = normalizeWorkspacePayload(imported);
+    const complete = normalizeWorkspacePayload(restored.data);
     let ws = await Workspace.findOne({ tenantRootUserId: tenantRoot });
     if (!ws) {
       try {
@@ -286,7 +288,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/', authMiddleware, async (req, res) => {
+router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, res) => {
   try {
     if (req.user.isMaster) {
       return res.status(403).json({ error: 'Master account cannot modify workspace data' });

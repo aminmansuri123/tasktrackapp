@@ -1,17 +1,12 @@
-const APP_VERSION = '15.6.0';
+const APP_VERSION = '15.6.1';
 
 let __loginErrorDismissTimer = null;
 
 /** Plaintext passwords for User rows not yet confirmed by a successful workspace sync (never in localStorage). */
 const __pendingPasswordsByUserId = new Map();
 
+/** Legacy key: cleared on logout so old installs drop any copy. Auth uses httpOnly cookie + credentials: 'include' only. */
 const API_AUTH_TOKEN_KEY = 'tasktrack_api_auth_token';
-
-function setApiAuthToken(token) {
-    if (token && typeof token === 'string') {
-        sessionStorage.setItem(API_AUTH_TOKEN_KEY, token);
-    }
-}
 
 function clearApiAuthToken() {
     sessionStorage.removeItem(API_AUTH_TOKEN_KEY);
@@ -87,10 +82,6 @@ async function apiFetch(path, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json';
-    }
-    const bearer = sessionStorage.getItem(API_AUTH_TOKEN_KEY) || localStorage.getItem(API_AUTH_TOKEN_KEY);
-    if (bearer && !headers.Authorization) {
-        headers.Authorization = `Bearer ${bearer}`;
     }
     return fetch(url, { ...options, credentials: 'include', headers });
 }
@@ -1155,7 +1146,6 @@ async function login() {
         }
         currentUser = body.user;
         if (body.smtpConfigured != null) currentUser.smtpConfigured = body.smtpConfigured;
-        if (body.token) setApiAuthToken(body.token);
         sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
             await apiPullWorkspace();
@@ -1297,7 +1287,6 @@ async function register() {
             return;
         }
         currentUser = body.user;
-        if (body.token) setApiAuthToken(body.token);
         sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
         try {
             await apiPullWorkspace();

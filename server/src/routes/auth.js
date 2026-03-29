@@ -13,6 +13,15 @@ const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 const ApprovalRequest = require('../models/ApprovalRequest');
 const { isEmailEnabled, sendAccountCreatedEmail, sendPasswordResetCodeEmail } = require('../services/emailService');
+const { validateBody } = require('../middleware/validateBody');
+const {
+  loginBodySchema,
+  registerBodySchema,
+  forgotPasswordRequestSchema,
+  forgotPasswordResetSchema,
+  changePasswordSchema,
+  requestApprovalSchema,
+} = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -47,9 +56,9 @@ router.get('/registration-policy', async (_req, res) => {
   }
 });
 
-router.post('/request-approval', async (req, res) => {
+router.post('/request-approval', validateBody(requestApprovalSchema), async (req, res) => {
   try {
-    const { name, email } = req.body || {};
+    const { name, email } = req.body;
     const em = String(email || '').toLowerCase().trim();
     const nm = String(name || '').trim();
     if (!em || !nm) {
@@ -102,12 +111,9 @@ router.get('/org-admins', async (_req, res) => {
   }
 });
 
-router.post('/register', async (req, res) => {
+router.post('/register', validateBody(registerBodySchema), async (req, res) => {
   try {
-    const { name, email, password } = req.body || {};
-    if (!name || !email || !password || String(password).length < 6) {
-      return res.status(400).json({ error: 'Invalid registration data' });
-    }
+    const { name, email, password } = req.body;
     const em = String(email).toLowerCase().trim();
     const exists = await User.findOne({ email: em });
     if (exists) {
@@ -120,13 +126,13 @@ router.post('/register', async (req, res) => {
     if (denied) {
       return res.status(403).json({ error: denied });
     }
-    const accountType = req.body?.accountType === 'team_user' ? 'team_user' : 'org_admin';
+    const accountType = req.body.accountType === 'team_user' ? 'team_user' : 'org_admin';
     const passwordHash = await bcrypt.hash(String(password), 12);
     const userId = await allocateUniqueUserId(Date.now());
 
     let doc;
     if (accountType === 'team_user') {
-      const raw = req.body?.orgAdminUserId;
+      const raw = req.body.orgAdminUserId;
       const pickerId = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
       if (Number.isNaN(pickerId)) {
         return res.status(400).json({ error: 'Select an account admin' });
@@ -228,9 +234,9 @@ function forgotRequestGenericResponse(res) {
   });
 }
 
-router.post('/forgot-password/request', async (req, res) => {
+router.post('/forgot-password/request', validateBody(forgotPasswordRequestSchema), async (req, res) => {
   try {
-    const em = String(req.body?.email || '').toLowerCase().trim();
+    const em = String(req.body.email || '').toLowerCase().trim();
     if (!em) {
       return res.status(400).json({ error: 'Email is required' });
     }
@@ -268,9 +274,9 @@ router.post('/forgot-password/request', async (req, res) => {
   }
 });
 
-router.post('/forgot-password/reset', async (req, res) => {
+router.post('/forgot-password/reset', validateBody(forgotPasswordResetSchema), async (req, res) => {
   try {
-    const { email, code, newPassword } = req.body || {};
+    const { email, code, newPassword } = req.body;
     const em = String(email || '').toLowerCase().trim();
     const codeDigits = String(code || '').replace(/\D/g, '').slice(0, 4);
     if (!em || codeDigits.length !== 4 || !newPassword || String(newPassword).length < 6) {
@@ -306,12 +312,9 @@ router.post('/forgot-password/reset', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', validateBody(loginBodySchema), async (req, res) => {
   try {
-    const { email, password } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password required' });
-    }
+    const { email, password } = req.body;
     const em = String(email).toLowerCase().trim();
     const doc = await User.findOne({ email: em });
     if (!doc || !(await bcrypt.compare(String(password), doc.passwordHash))) {
@@ -338,12 +341,9 @@ router.post('/logout', (_req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/change-password', authMiddleware, async (req, res) => {
+router.post('/change-password', authMiddleware, validateBody(changePasswordSchema), async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body || {};
-    if (!currentPassword || !newPassword || String(newPassword).length < 6) {
-      return res.status(400).json({ error: 'Current password and new password (min 6 characters) required' });
-    }
+    const { currentPassword, newPassword } = req.body;
     const doc = await User.findOne({ userId: req.user.userId });
     if (!doc || !(await bcrypt.compare(String(currentPassword), doc.passwordHash))) {
       return res.status(401).json({ error: 'Current password is incorrect' });

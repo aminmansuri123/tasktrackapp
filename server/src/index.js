@@ -182,13 +182,29 @@ async function main() {
     legacyHeaders: false,
   });
 
+  const workspaceLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many workspace requests, try again later.' },
+  });
+
+  const attachmentsLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many attachment requests, try again later.' },
+  });
+
   app.use(globalLimiter);
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   app.use('/api/auth', authLimiter, authRoutes);
-  app.use('/api/workspace', workspaceRoutes);
-  app.use('/api/attachments', attachmentsRoutes);
+  app.use('/api/workspace', workspaceLimiter, workspaceRoutes);
+  app.use('/api/attachments', attachmentsLimiter, attachmentsRoutes);
   app.use('/api/master', masterLimiter, masterRoutes);
 
   app.use((err, _req, res, _next) => {
