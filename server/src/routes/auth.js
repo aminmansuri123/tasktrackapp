@@ -11,6 +11,7 @@ const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 const ApprovalRequest = require('../models/ApprovalRequest');
+const { isEmailEnabled, sendAccountCreatedEmail } = require('../services/emailService');
 
 const router = express.Router();
 
@@ -188,6 +189,11 @@ router.post('/register', async (req, res) => {
       isMaster: doc.isMaster,
     });
     res.cookie('auth_token', token, cookieOptions());
+    if (isEmailEnabled()) {
+      void sendAccountCreatedEmail(doc.email, doc.name || doc.email, 'self_register').catch((e) =>
+        console.error('Register welcome email:', e.message)
+      );
+    }
     return res.status(201).json({ user: publicUser(doc), token });
   } catch (e) {
     console.error(e);

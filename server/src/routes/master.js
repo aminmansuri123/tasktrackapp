@@ -12,6 +12,7 @@ const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const ApprovalRequest = require('../models/ApprovalRequest');
 const { normalizeEmailEntry } = require('../services/registrationPolicy');
+const { isEmailEnabled, sendAccountCreatedEmail } = require('../services/emailService');
 
 const router = express.Router();
 
@@ -77,6 +78,11 @@ router.post('/users', authMiddleware, requireMaster, async (req, res) => {
       });
       await ensureWorkspaceForTenantRoot(tenantRoot);
       await reconcileWorkspaceEmbeddedUsersForTenant(tenantRoot);
+      if (isEmailEnabled()) {
+        void sendAccountCreatedEmail(doc.email, doc.name || doc.email, 'admin_created').catch((e) =>
+          console.error('Master create user welcome email:', e.message)
+        );
+      }
       return res.status(201).json({ ok: true, user: masterUserSummary(doc) });
     }
 
@@ -92,6 +98,11 @@ router.post('/users', authMiddleware, requireMaster, async (req, res) => {
     });
     await ensureWorkspaceForTenantRoot(userId);
     await reconcileWorkspaceEmbeddedUsersForTenant(userId);
+    if (isEmailEnabled()) {
+      void sendAccountCreatedEmail(doc.email, doc.name || doc.email, 'admin_created').catch((e) =>
+        console.error('Master create user welcome email:', e.message)
+      );
+    }
     return res.status(201).json({ ok: true, user: masterUserSummary(doc) });
   } catch (e) {
     console.error(e);

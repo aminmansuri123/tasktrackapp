@@ -5,7 +5,13 @@ const ReminderPreference = require('../models/ReminderPreference');
 const { authMiddleware } = require('../middleware/auth');
 const { defaultWorkspaceData, normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
-const { isEmailEnabled, sendTestEmail, sendTaskAssignmentEmail } = require('../services/emailService');
+const {
+  isEmailEnabled,
+  sendTestEmail,
+  sendTaskAssignmentEmail,
+  sendTaskRejectedEmail,
+  sendAccountCreatedEmail,
+} = require('../services/emailService');
 const { EMAIL_CONFIGURED } = require('../config');
 const {
   syncUsersFromClientPayload,
@@ -18,7 +24,7 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '15.4.0';
+const EXPORT_VERSION = '15.5.0';
 
 /**
  * Determine workspace tenant root for the current request.
@@ -34,6 +40,18 @@ function resolveTenantRoot(req) {
     return Number(tr);
   }
   return Number(req.user.userId);
+}
+
+/** Whether user doc belongs to this tenant workspace (member, org owner, or shared-in). */
+function userInTenantWorkspace(tenantRoot, u) {
+  if (!u || u.isMaster) return false;
+  const root = Number(tenantRoot);
+  if (!Number.isFinite(root)) return false;
+  const tr = u.tenantRootUserId != null ? Number(u.tenantRootUserId) : null;
+  if (tr === root) return true;
+  if (Number(u.userId) === root) return true;
+  if (Array.isArray(u.sharedWithTenants) && u.sharedWithTenants.map(Number).includes(root)) return true;
+  return false;
 }
 
 async function loadTenantUsers(tenantRoot, currentUserId) {
@@ -488,12 +506,17 @@ router.get('/reminder-prefs/org-users', authMiddleware, async (req, res) => {
 router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
   if (!EMAIL_CONFIGURED) return res.json({ ok: true, skipped: true });
   try {
-    const { assignedToUserId, taskTitle, dueDate, isSelf } = req.body || {};
+    const { assignedToUserId, taskTitle, dueDate, isSelf, eventKind } = req.body || {};
     const assigneeId = parseInt(String(assignedToUserId), 10);
     if (Number.isNaN(assigneeId)) return res.status(400).json({ error: 'Invalid assignedToUserId' });
 
     const assignee = await User.findOne({ userId: assigneeId }).lean();
     if (!assignee || !assignee.email) return res.json({ ok: true, skipped: true });
+
+    const tenantRoot = resolveTenantRoot(req);
+    if (tenantRoot != null && !userInTenantWorkspace(tenantRoot, assignee)) {
+      return res.status(403).json({ error: 'Assignee not in your organisation' });
+    }
 
     const pref = await ReminderPreference.findOne({ userId: assigneeId }).lean();
     const wantsAssignNotify = pref ? pref.notifyOnAssign !== false : true;
@@ -505,17 +528,86 @@ router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
     const assigner = await User.findOne({ userId: req.user.userId }).lean();
     const assignerName = assigner ? (assigner.name || assigner.email) : 'Admin';
 
+    const kind = eventKind === 'reassigned' ? 'reassigned' : 'created';
     await sendTaskAssignmentEmail(
       assignee.email,
       assignee.name || assignee.email,
       taskTitle || '(untitled)',
       dueDate || null,
       assignerName,
-      !!isSelf
+      !!isSelf,
+      kind
     );
     return res.json({ ok: true });
   } catch (e) {
     console.error('notify-task-assigned error:', e);
+    return res.json({ ok: true, skipped: true });
+  }
+});
+
+router.post('/notify-task-rejected', authMiddleware, async (req, res) => {
+  if (!EMAIL_CONFIGURED) return res.json({ ok: true, skipped: true });
+  try {
+    if (req.user.isMaster || req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin only' });
+    }
+    const { assignedToUserId, taskTitle, comment } = req.body || {};
+    const assigneeId = parseInt(String(assignedToUserId), 10);
+    const c = String(comment || '').trim();
+    if (Number.isNaN(assigneeId) || !c) {
+      return res.status(400).json({ error: 'assignedToUserId and non-empty comment required' });
+    }
+
+    const tenantRoot = resolveTenantRoot(req);
+    const assignee = await User.findOne({ userId: assigneeId }).lean();
+    if (!assignee || !assignee.email) return res.json({ ok: true, skipped: true });
+    if (tenantRoot != null && !userInTenantWorkspace(tenantRoot, assignee)) {
+      return res.status(403).json({ error: 'User not in your organisation' });
+    }
+
+    const admin = await User.findOne({ userId: req.user.userId }).lean();
+    const adminName = admin ? (admin.name || admin.email) : 'Admin';
+
+    await sendTaskRejectedEmail(
+      assignee.email,
+      assignee.name || assignee.email,
+      taskTitle || '(untitled)',
+      c,
+      adminName
+    );
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('notify-task-rejected error:', e);
+    return res.json({ ok: true, skipped: true });
+  }
+});
+
+router.post('/notify-user-created', authMiddleware, async (req, res) => {
+  if (!EMAIL_CONFIGURED) return res.json({ ok: true, skipped: true });
+  try {
+    if (req.user.isMaster || req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin only' });
+    }
+    const { newUserId, newUserEmail, newUserName } = req.body || {};
+    const uid = parseInt(String(newUserId), 10);
+    const em = String(newUserEmail || '').toLowerCase().trim();
+    if (Number.isNaN(uid) || !em) {
+      return res.status(400).json({ error: 'newUserId and newUserEmail required' });
+    }
+
+    const tenantRoot = resolveTenantRoot(req);
+    const u = await User.findOne({ userId: uid }).lean();
+    if (!u || u.email !== em) {
+      return res.status(400).json({ error: 'User not found or email mismatch — save the user first, then retry.' });
+    }
+    if (tenantRoot != null && !userInTenantWorkspace(tenantRoot, u)) {
+      return res.status(403).json({ error: 'User not in your organisation' });
+    }
+
+    await sendAccountCreatedEmail(u.email, newUserName || u.name || u.email, 'admin_created');
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('notify-user-created error:', e);
     return res.json({ ok: true, skipped: true });
   }
 });

@@ -107,6 +107,15 @@ async function getTransporter() {
   return _transporter;
 }
 
+function escapeHtml(s) {
+  if (s == null || s === '') return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return 'N/A';
   const d = new Date(dateStr + 'T00:00:00');
@@ -191,10 +200,6 @@ async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTa
 }
 
 function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf) {
-  const dueLine = dueDate ? `<strong>Due:</strong> ${formatDate(dueDate)}` : '<strong>Due:</strong> Not set';
-  const byLine = isSelf
-    ? 'You created this task for yourself.'
-    : `Assigned by <strong>${assignerName || 'an admin'}</strong>.`;
   return `
 <!DOCTYPE html>
 <html>
@@ -203,15 +208,15 @@ function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isS
   <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
     <div style="background:#16a34a;color:#fff;padding:20px 24px;">
       <h1 style="margin:0;font-size:20px;">New Task Assigned</h1>
-      <p style="margin:6px 0 0;font-size:14px;opacity:0.9;">Hello ${assigneeName}, a task has been ${isSelf ? 'created by you' : 'assigned to you'}.</p>
+      <p style="margin:6px 0 0;font-size:14px;opacity:0.9;">Hello ${escapeHtml(assigneeName)}, a task has been ${isSelf ? 'created by you' : 'assigned to you'}.</p>
     </div>
     <div style="padding:20px 24px;">
       <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:16px;">
-        <tr><td style="padding:8px 0;font-weight:600;width:100px;">Task:</td><td style="padding:8px 0;">${taskTitle || '(untitled)'}</td></tr>
+        <tr><td style="padding:8px 0;font-weight:600;width:100px;">Task:</td><td style="padding:8px 0;">${escapeHtml(taskTitle || '(untitled)')}</td></tr>
         <tr><td style="padding:8px 0;font-weight:600;">Due Date:</td><td style="padding:8px 0;">${dueDate ? formatDate(dueDate) : 'Not set'}</td></tr>
-        <tr><td style="padding:8px 0;font-weight:600;">Assigned By:</td><td style="padding:8px 0;">${isSelf ? 'Self' : (assignerName || 'Admin')}</td></tr>
+        <tr><td style="padding:8px 0;font-weight:600;">Assigned By:</td><td style="padding:8px 0;">${isSelf ? 'Self' : escapeHtml(assignerName || 'Admin')}</td></tr>
       </table>
-      <p style="font-size:13px;color:#666;">${byLine}</p>
+      <p style="font-size:13px;color:#666;">${isSelf ? 'You created this task for yourself.' : `Assigned by <strong>${escapeHtml(assignerName || 'an admin')}</strong>.`}</p>
       <p style="font-size:13px;color:#999;margin-top:16px;">This is an automated notification from your Task Management System.</p>
     </div>
   </div>
@@ -219,18 +224,100 @@ function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isS
 </html>`;
 }
 
-async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate, assignerName, isSelf) {
+async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate, assignerName, isSelf, eventKind) {
   if (!isEmailEnabled()) return false;
 
-  const subject = isSelf
-    ? `New Task: ${taskTitle || '(untitled)'}`
-    : `Task Assigned: ${taskTitle || '(untitled)'}`;
+  const title = taskTitle || '(untitled)';
+  let subject;
+  if (eventKind === 'reassigned' && !isSelf) {
+    subject = `Task reassigned to you: ${title}`;
+  } else if (isSelf) {
+    subject = `New task created: ${title}`;
+  } else {
+    subject = `New task assigned to you: ${title}`;
+  }
 
   try {
     await sendMail(toEmail, subject, buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf));
     return true;
   } catch (err) {
     console.error(`Assignment email failed for ${toEmail}:`, err.message);
+    return false;
+  }
+}
+
+function buildTaskRejectedHtml(assigneeName, taskTitle, comment, adminName) {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,Helvetica,sans-serif;color:#333;margin:0;padding:20px;background:#f5f5f5;">
+  <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+    <div style="background:#dc2626;color:#fff;padding:20px 24px;">
+      <h1 style="margin:0;font-size:20px;">Task completion not accepted</h1>
+      <p style="margin:6px 0 0;font-size:14px;opacity:0.95;">Hello ${escapeHtml(assigneeName)}, your submitted completion for a task was reviewed and needs follow-up.</p>
+    </div>
+    <div style="padding:20px 24px;">
+      <p style="margin:0 0 12px;"><strong>Task:</strong> ${escapeHtml(taskTitle || '(untitled)')}</p>
+      <p style="margin:0 0 8px;"><strong>Reviewer:</strong> ${escapeHtml(adminName || 'Admin')}</p>
+      <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:12px 14px;margin-top:16px;border-radius:4px;">
+        <p style="margin:0 0 6px;font-size:13px;color:#991b1b;font-weight:600;">Comment</p>
+        <p style="margin:0;white-space:pre-wrap;font-size:14px;color:#333;">${escapeHtml(comment)}</p>
+      </div>
+      <p style="font-size:13px;color:#999;margin-top:20px;">Please update the task as needed and resubmit when ready.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+async function sendTaskRejectedEmail(toEmail, assigneeName, taskTitle, comment, adminName) {
+  if (!isEmailEnabled()) return false;
+  const subject = `Task needs revision: ${taskTitle || '(untitled)'}`;
+  try {
+    await sendMail(toEmail, subject, buildTaskRejectedHtml(assigneeName, taskTitle, comment, adminName));
+    return true;
+  } catch (err) {
+    console.error(`Task rejected email failed for ${toEmail}:`, err.message);
+    return false;
+  }
+}
+
+function buildAccountCreatedHtml(userName, contextHtml) {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,Helvetica,sans-serif;color:#333;margin:0;padding:20px;background:#f5f5f5;">
+  <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+    <div style="background:#2563eb;color:#fff;padding:20px 24px;">
+      <h1 style="margin:0;font-size:20px;">Welcome to Task Tracker</h1>
+      <p style="margin:6px 0 0;font-size:14px;opacity:0.9;">Hello ${escapeHtml(userName)},</p>
+    </div>
+    <div style="padding:20px 24px;">
+      ${contextHtml}
+      <p style="font-size:14px;color:#333;margin-top:16px;">Sign in with <strong>this email address</strong> and your password.</p>
+      <p style="font-size:13px;color:#999;margin-top:16px;">This message was sent automatically. Do not reply with your password.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+async function sendAccountCreatedEmail(toEmail, userName, source) {
+  if (!isEmailEnabled()) return false;
+  let contextHtml;
+  if (source === 'self_register') {
+    contextHtml = '<p style="font-size:14px;color:#333;margin:0;">Your account was created successfully. Use the password you chose at registration.</p>';
+  } else {
+    contextHtml =
+      '<p style="font-size:14px;color:#333;margin:0;">An administrator created your Task Tracker account. Use the password they gave you (you can change it after signing in).</p>';
+  }
+  try {
+    await sendMail(toEmail, 'Your Task Tracker account is ready', buildAccountCreatedHtml(userName, contextHtml));
+    return true;
+  } catch (err) {
+    console.error(`Account created email failed for ${toEmail}:`, err.message);
     return false;
   }
 }
@@ -248,4 +335,11 @@ async function sendTestEmail(toEmail, userName) {
   return true;
 }
 
-module.exports = { isEmailEnabled, sendTaskReminderEmail, sendTaskAssignmentEmail, sendTestEmail };
+module.exports = {
+  isEmailEnabled,
+  sendTaskReminderEmail,
+  sendTaskAssignmentEmail,
+  sendTestEmail,
+  sendTaskRejectedEmail,
+  sendAccountCreatedEmail,
+};

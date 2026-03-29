@@ -1,4 +1,4 @@
-const APP_VERSION = '15.4.0';
+const APP_VERSION = '15.5.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -3759,6 +3759,11 @@ function rejectTaskCompletion(taskId) {
         return;
     }
 
+    const dataBefore = getData();
+    const taskSnap = dataBefore.tasks.find(t => t.id == taskId);
+    const assignedTo = taskSnap ? taskSnap.assigned_to : null;
+    const taskTitle = taskSnap ? taskSnap.task_name : '';
+
     updateData(data => {
         const task = data.tasks.find(t => t.id == taskId);
         if (task) {
@@ -3781,6 +3786,17 @@ function rejectTaskCompletion(taskId) {
     renderDashboard();
     renderCalendar();
     renderInteractiveDashboard();
+
+    if (isApiMode() && currentUser && currentUser.smtpConfigured && assignedTo != null) {
+        apiFetch('/api/workspace/notify-task-rejected', {
+            method: 'POST',
+            body: JSON.stringify({
+                assignedToUserId: assignedTo,
+                taskTitle: taskTitle || '',
+                comment: adminComment.trim(),
+            }),
+        }).catch(e => console.error('Task rejection email failed:', e));
+    }
 }
 
 function filterTasksByAdminReview() {
@@ -4197,6 +4213,7 @@ function saveTask(event) {
                     taskTitle: task.task_name,
                     dueDate: task.due_date || task.next_due_date || null,
                     isSelf,
+                    eventKind: isNewTask ? 'created' : 'reassigned',
                 }),
             }).catch(e => console.error('Task assignment notification failed:', e));
         }
@@ -4530,6 +4547,19 @@ function saveQuickTask(event) {
         setTimeout(() => {
             messageDiv.innerHTML = '';
         }, 3000);
+    }
+
+    if (isApiMode() && currentUser && currentUser.smtpConfigured) {
+        apiFetch('/api/workspace/notify-task-assigned', {
+            method: 'POST',
+            body: JSON.stringify({
+                assignedToUserId: currentUser.id,
+                taskTitle: taskName,
+                dueDate,
+                isSelf: true,
+                eventKind: 'created',
+            }),
+        }).catch(e => console.error('Quick task email notification failed:', e));
     }
 }
 
@@ -5653,6 +5683,7 @@ async function saveUser(event) {
         }
     }
 
+    let createdForNotify = null;
     updateData(d => {
         if (userId) {
             const user = d.users.find(u => u.id === parseInt(userId));
@@ -5676,6 +5707,11 @@ async function saveUser(event) {
             };
             d.users.push(newUser);
             rememberPendingUserPasswordForSync(newUser.id, password);
+            createdForNotify = {
+                id: newUser.id,
+                email: String(newUser.email || '').toLowerCase().trim(),
+                name: String(newUser.name || '').trim(),
+            };
         }
     });
 
@@ -5690,6 +5726,15 @@ async function saveUser(event) {
                     ? `${__lastWorkspacePutError}\n\nOpen Settings and try again, or check your connection.`
                     : 'Could not save users to the server. Check your connection, then open Settings and save again.'
             );
+        } else if (createdForNotify && currentUser.smtpConfigured) {
+            apiFetch('/api/workspace/notify-user-created', {
+                method: 'POST',
+                body: JSON.stringify({
+                    newUserId: createdForNotify.id,
+                    newUserEmail: createdForNotify.email,
+                    newUserName: createdForNotify.name,
+                }),
+            }).catch(e => console.error('New user welcome email failed:', e));
         }
     }
 }
@@ -5965,7 +6010,7 @@ async function renderReminderPrefsSection() {
 
         const adminLocked = pref.setByAdmin && currentUser.role !== 'admin';
         let html = `
-            <p style="color:#666;font-size:13px;margin-bottom:12px;">Configure email notifications for task reminders and task assignments.</p>
+            <p style="color:#666;font-size:13px;margin-bottom:12px;">Configure daily reminders and assignment emails (below). With email enabled on the server, users also get: <strong>new task</strong> alerts, <strong>welcome</strong> when an account is created, and <strong>rejection</strong> emails with the admin comment when completion is rejected.</p>
             <h4 style="margin:0 0 8px;font-size:14px;">Daily Reminders</h4>
             <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
