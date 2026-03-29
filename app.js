@@ -87,7 +87,8 @@ async function apiFetch(path, options = {}) {
 async function apiPullWorkspace() {
     const res = await apiFetch('/api/workspace');
     if (!res.ok) throw new Error('Failed to load workspace');
-    __workspaceCache = await res.json();
+    const body = await res.json();
+    __workspaceCache = normalizeData(body);
 }
 
 function scheduleWorkspacePush() {

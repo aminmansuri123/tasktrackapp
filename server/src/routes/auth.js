@@ -101,6 +101,7 @@ router.post('/register', async (req, res) => {
         isMaster: false,
         tenantRootUserId: tenantRoot,
       });
+      await ensureWorkspaceForTenantRoot(tenantRoot);
     } else {
       doc = await User.create({
         userId,

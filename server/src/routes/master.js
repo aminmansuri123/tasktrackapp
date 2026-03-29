@@ -59,6 +59,7 @@ router.post('/users', authMiddleware, requireMaster, async (req, res) => {
         isMaster: false,
         tenantRootUserId: tenantRoot,
       });
+      await ensureWorkspaceForTenantRoot(tenantRoot);
       return res.status(201).json({ ok: true, user: masterUserSummary(doc) });
     }
 

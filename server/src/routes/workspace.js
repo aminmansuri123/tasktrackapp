@@ -18,10 +18,12 @@ const EXPORT_VERSION = '12.0.8';
 
 function resolveTenantRoot(req) {
   if (req.user.isMaster) return null;
-  if (req.user.tenantRootUserId != null && !Number.isNaN(req.user.tenantRootUserId)) {
-    return req.user.tenantRootUserId;
+  const tr = req.user.tenantRootUserId;
+  if (tr != null && tr !== '' && !Number.isNaN(Number(tr))) {
+    return Number(tr);
   }
-  return req.user.userId;
+  const uid = req.user.userId;
+  return uid != null && !Number.isNaN(Number(uid)) ? Number(uid) : uid;
 }
 
 router.get('/backup', authMiddleware, async (req, res) => {
