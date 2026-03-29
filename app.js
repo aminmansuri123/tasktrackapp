@@ -1,4 +1,4 @@
-const APP_VERSION = '15.5.2';
+const APP_VERSION = '15.6.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -765,13 +765,166 @@ function checkAuth() {
         if (nm) nm.value = '';
         const lat = document.getElementById('loginAccountType');
         if (lat) lat.value = 'org_admin';
+        const lm = document.getElementById('loginModal');
+        if (lm) lm.removeAttribute('data-forgot-flow');
+        const fp = document.getElementById('loginForgotPanel');
+        if (fp) fp.classList.add('hidden');
         setLoginPanelMode('signin');
+    }
+}
+
+function applyLoginForgotChrome() {
+    const modal = document.getElementById('loginModal');
+    if (!modal) return;
+    const mode = modal.getAttribute('data-login-mode') || 'signin';
+    const forgotActive = modal.getAttribute('data-forgot-flow') === '1' && mode === 'signin';
+    const seg = document.getElementById('loginTabsRow');
+    const fp = document.getElementById('loginForgotPanel');
+    const pwdWrap = document.getElementById('loginPasswordWrap');
+    const subBtn = document.getElementById('loginSubmitBtn');
+    const forgotRow = document.getElementById('loginForgotRow');
+    if (forgotActive) {
+        if (seg) seg.classList.add('hidden');
+        if (pwdWrap) pwdWrap.classList.add('hidden');
+        if (subBtn) subBtn.classList.add('hidden');
+        if (forgotRow) forgotRow.classList.add('hidden');
+        if (fp) fp.classList.remove('hidden');
+    } else {
+        if (fp) fp.classList.add('hidden');
+        if (seg) seg.classList.remove('hidden');
+        if (pwdWrap) pwdWrap.classList.remove('hidden');
+        if (subBtn) subBtn.classList.remove('hidden');
+        if (forgotRow) {
+            forgotRow.classList.toggle('hidden', !isApiMode() || mode !== 'signin');
+        }
+    }
+}
+
+function clearForgotPanelFeedback() {
+    const fe = document.getElementById('forgotError');
+    if (fe) {
+        fe.textContent = '';
+        fe.style.color = '';
+    }
+}
+
+function showForgotPanelMessage(msg, isError) {
+    const fe = document.getElementById('forgotError');
+    if (!fe) return;
+    fe.textContent = msg || '';
+    fe.style.color = isError ? '#c62828' : '#2e7d32';
+}
+
+function openLoginForgotPanel() {
+    if (!isApiMode()) return;
+    const modal = document.getElementById('loginModal');
+    if (!modal) return;
+    clearLoginFormError();
+    clearForgotPanelFeedback();
+    const fc = document.getElementById('forgotCode');
+    const fn = document.getElementById('forgotNewPassword');
+    if (fc) fc.value = '';
+    if (fn) fn.value = '';
+    modal.setAttribute('data-forgot-flow', '1');
+    setLoginPanelMode('signin');
+}
+
+function closeLoginForgotPanel() {
+    const modal = document.getElementById('loginModal');
+    if (!modal || modal.getAttribute('data-forgot-flow') !== '1') return;
+    modal.removeAttribute('data-forgot-flow');
+    clearForgotPanelFeedback();
+    setLoginPanelMode('signin');
+}
+
+async function submitForgotSendCode() {
+    if (!isApiMode()) return;
+    clearForgotPanelFeedback();
+    const email = document.getElementById('loginEmail') && document.getElementById('loginEmail').value.trim();
+    if (!email) {
+        showForgotPanelMessage('Enter your email address first.', true);
+        return;
+    }
+    try {
+        const res = await apiFetch('/api/auth/forgot-password/request', {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+        });
+        const text = await res.text();
+        let j = {};
+        try {
+            j = text ? JSON.parse(text) : {};
+        } catch {
+            j = {};
+        }
+        if (!res.ok) {
+            showForgotPanelMessage(j.error || `Request failed (${res.status})`, true);
+            return;
+        }
+        showForgotPanelMessage(j.message || 'If an account exists for this email, a code will arrive shortly. Check your inbox.', false);
+    } catch (e) {
+        console.error(e);
+        showForgotPanelMessage('Could not reach server. Check API URL and network.', true);
+    }
+}
+
+async function submitForgotReset() {
+    if (!isApiMode()) return;
+    clearForgotPanelFeedback();
+    const email = document.getElementById('loginEmail') && document.getElementById('loginEmail').value.trim();
+    const codeRaw = document.getElementById('forgotCode') && document.getElementById('forgotCode').value;
+    const code = String(codeRaw || '').replace(/\D/g, '').slice(0, 4);
+    const newPassword = document.getElementById('forgotNewPassword') && document.getElementById('forgotNewPassword').value;
+    if (!email) {
+        showForgotPanelMessage('Email is required.', true);
+        return;
+    }
+    if (code.length !== 4) {
+        showForgotPanelMessage('Enter the 4-digit code from your email.', true);
+        return;
+    }
+    if (!newPassword || newPassword.length < 6) {
+        showForgotPanelMessage('New password must be at least 6 characters.', true);
+        return;
+    }
+    try {
+        const res = await apiFetch('/api/auth/forgot-password/reset', {
+            method: 'POST',
+            body: JSON.stringify({ email, code, newPassword }),
+        });
+        const text = await res.text();
+        let j = {};
+        try {
+            j = text ? JSON.parse(text) : {};
+        } catch {
+            j = {};
+        }
+        if (!res.ok) {
+            showForgotPanelMessage(j.error || `Reset failed (${res.status})`, true);
+            return;
+        }
+        showForgotPanelMessage(j.message || 'Password updated. You can sign in now.', false);
+        const fn = document.getElementById('forgotNewPassword');
+        const fc = document.getElementById('forgotCode');
+        if (fn) fn.value = '';
+        if (fc) fc.value = '';
+        const lp = document.getElementById('loginPassword');
+        if (lp) lp.value = '';
+        setTimeout(() => closeLoginForgotPanel(), 1200);
+    } catch (e) {
+        console.error(e);
+        showForgotPanelMessage('Could not reach server. Check API URL and network.', true);
     }
 }
 
 function setLoginPanelMode(mode) {
     const modal = document.getElementById('loginModal');
     if (!modal) return;
+    if (mode !== 'signin' && modal.getAttribute('data-forgot-flow') === '1') {
+        modal.removeAttribute('data-forgot-flow');
+        const fpEarly = document.getElementById('loginForgotPanel');
+        if (fpEarly) fpEarly.classList.add('hidden');
+    }
     modal.setAttribute('data-login-mode', mode);
     const nameGroup = document.getElementById('loginNameGroup');
     const submitBtn = document.getElementById('loginSubmitBtn');
@@ -819,21 +972,26 @@ function setLoginPanelMode(mode) {
             tSign.setAttribute('aria-selected', 'true');
         }
     }
+    applyLoginForgotChrome();
     updateLoginScreenCopy();
 }
 
 function updateLoginScreenCopy() {
     const sub = document.getElementById('loginBrandSubtitle');
     if (!sub) return;
+    const modal = document.getElementById('loginModal');
+    if (modal && modal.getAttribute('data-forgot-flow') === '1') {
+        sub.textContent = 'Reset your password using the code sent to your email.';
+        return;
+    }
     if (isApiMode()) {
-        const modal = document.getElementById('loginModal');
         const mode = (modal && modal.getAttribute('data-login-mode')) || 'signin';
         if (mode === 'register') {
-            sub.textContent = 'Account admin creates a new workspace; account user joins an existing admin. Cloud signup uses the server.';
+            sub.textContent = 'Account admin creates a new workspace; account user joins an existing admin.';
         } else if (mode === 'master') {
             sub.textContent = 'Master sign-in for cross-tenant support tools only.';
         } else {
-            sub.textContent = 'Sign in — your workspace loads from the server.';
+            sub.textContent = 'Sign in or create an account to continue.';
         }
     } else {
         sub.textContent = 'Sign in or create an account. Add an API URL in config.js to use cloud storage; otherwise data stays in this browser only.';
@@ -842,6 +1000,7 @@ function updateLoginScreenCopy() {
 
 function submitLoginPanel() {
     const modal = document.getElementById('loginModal');
+    if (modal && modal.getAttribute('data-forgot-flow') === '1') return;
     const mode = (modal && modal.getAttribute('data-login-mode')) || 'signin';
     if (mode === 'register') {
         register();
@@ -865,6 +1024,14 @@ function wireLoginScreenControls() {
     if (tMas) tMas.addEventListener('click', () => setLoginPanelMode('master'));
     const lat = document.getElementById('loginAccountType');
     if (lat) lat.addEventListener('change', updateLoginRegistrationFieldsVisibility);
+    const forgotLink = document.getElementById('loginForgotPasswordLink');
+    if (forgotLink) forgotLink.addEventListener('click', () => openLoginForgotPanel());
+    const forgotSend = document.getElementById('forgotSendCodeBtn');
+    if (forgotSend) forgotSend.addEventListener('click', () => void submitForgotSendCode());
+    const forgotReset = document.getElementById('forgotResetBtn');
+    if (forgotReset) forgotReset.addEventListener('click', () => void submitForgotReset());
+    const forgotBack = document.getElementById('forgotBackBtn');
+    if (forgotBack) forgotBack.addEventListener('click', () => closeLoginForgotPanel());
 }
 
 function updateLoginRegistrationFieldsVisibility() {

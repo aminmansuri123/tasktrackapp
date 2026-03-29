@@ -15,6 +15,11 @@ const userSchema = new mongoose.Schema(
     enabledFeatures: { type: [String], default: [] },
     /** Additional tenant roots this user is shared with (visible + assignable in those orgs). */
     sharedWithTenants: { type: [Number], default: [] },
+    /** Ephemeral state for email-based password reset (4-digit code). */
+    passwordResetCodeHash: { type: String, default: null },
+    passwordResetExpiresAt: { type: Date, default: null },
+    passwordResetAttempts: { type: Number, default: 0 },
+    passwordResetLastSentAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

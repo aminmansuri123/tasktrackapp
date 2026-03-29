@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Task Tracking System</title>
+    <title>Task Management System</title>
     <style>
         * {
             margin: 0;
@@ -953,6 +953,51 @@
             transform: translateY(-1px);
         }
 
+        .login-forgot-row {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 6px;
+        }
+
+        .login-forgot-link {
+            background: none;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+            font-size: 12px;
+            color: #1565c0;
+            text-decoration: underline;
+            font-weight: 500;
+        }
+
+        .login-forgot-link:hover {
+            color: #0d47a1;
+        }
+
+        .login-forgot-back {
+            display: block;
+            margin-top: 18px;
+            background: none;
+            border: none;
+            padding: 0;
+            font-size: 13px;
+            color: #546e7a;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        .login-forgot-back:hover {
+            color: #37474f;
+        }
+
+        #loginModal.login-screen #loginForgotPanel .login-primary {
+            margin-top: 12px;
+        }
+
+        #loginModal.login-screen #forgotResetBtn {
+            margin-top: 8px;
+        }
+
         .master-tools-hint {
             font-size: 12px;
             color: rgba(255, 255, 255, 0.95);
@@ -1349,7 +1394,7 @@
     <div class="container">
         <div class="header">
             <div class="header-title-block">
-                <span class="header-title-main">📋 Task Tracking System</span>
+                <span class="header-title-main">📋 Task Management System</span>
                 <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.8</span></span>
             </div>
             <div class="user-info">
@@ -2202,10 +2247,10 @@
             <div class="login-form-panel">
                 <div class="login-screen-inner">
                     <div class="login-brand">
-                        <h2>Task Tracking System</h2>
+                        <h2>Task Management System</h2>
                         <p id="loginBrandSubtitle">Sign in or create an account to continue</p>
                     </div>
-                    <div class="login-segment" role="tablist">
+                    <div id="loginTabsRow" class="login-segment" role="tablist">
                         <button type="button" id="loginTabSignin" class="active" aria-selected="true">Sign in</button>
                         <button type="button" id="loginTabRegister" aria-selected="false">Create account</button>
                         <button type="button" id="loginTabMaster" aria-selected="false">Master</button>
@@ -2231,11 +2276,29 @@
                         <label for="loginEmail">Email</label>
                         <input type="email" class="form-control" id="loginEmail" name="email" placeholder="you@company.com" autocomplete="username" required>
                     </div>
-                    <div class="form-group">
+                    <div id="loginPasswordWrap" class="form-group">
                         <label for="loginPassword">Password</label>
                         <input type="password" class="form-control" id="loginPassword" name="password" placeholder="Min. 6 characters" autocomplete="off" required>
                     </div>
                     <button type="button" class="login-primary" id="loginSubmitBtn">Sign in</button>
+                    <div id="loginForgotRow" class="login-forgot-row hidden">
+                        <button type="button" class="login-forgot-link" id="loginForgotPasswordLink">Forgot password?</button>
+                    </div>
+                    <div id="loginForgotPanel" class="hidden">
+                        <p class="login-forgot-hint" style="font-size:13px;color:#546e7a;margin:0 0 14px;line-height:1.45;">Use the email above, then request a code. Enter the 4-digit code and a new password below.</p>
+                        <button type="button" class="login-primary" id="forgotSendCodeBtn">Send code to email</button>
+                        <div class="form-group" style="margin-top:16px;">
+                            <label for="forgotCode">4-digit code</label>
+                            <input type="text" class="form-control" id="forgotCode" inputmode="numeric" maxlength="4" placeholder="e.g. 4829" autocomplete="one-time-code">
+                        </div>
+                        <div class="form-group">
+                            <label for="forgotNewPassword">New password</label>
+                            <input type="password" class="form-control" id="forgotNewPassword" placeholder="Min. 6 characters" autocomplete="new-password">
+                        </div>
+                        <button type="button" class="login-primary" id="forgotResetBtn">Reset password</button>
+                        <button type="button" class="login-forgot-back" id="forgotBackBtn">← Back to sign in</button>
+                        <div id="forgotError" style="margin-top: 12px; font-size: 13px;"></div>
+                    </div>
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>

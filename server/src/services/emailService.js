@@ -331,6 +331,39 @@ async function sendAccountCreatedEmail(toEmail, userName, source) {
   }
 }
 
+function buildPasswordResetCodeHtml(userName, code) {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,Helvetica,sans-serif;color:#333;margin:0;padding:20px;background:#f5f5f5;">
+  <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+    <div style="background:#0d47a1;color:#fff;padding:20px 24px;">
+      <h1 style="margin:0;font-size:20px;">Password reset code</h1>
+      <p style="margin:6px 0 0;font-size:14px;opacity:0.95;">Hello ${escapeHtml(userName)},</p>
+    </div>
+    <div style="padding:20px 24px;">
+      <p style="font-size:14px;color:#333;margin:0 0 16px;">Use this code to reset your Task Management System password. It expires in 15 minutes.</p>
+      <p style="font-size:32px;font-weight:700;letter-spacing:0.25em;text-align:center;margin:20px 0;padding:16px;background:#f1f5f9;border-radius:8px;color:#0d47a1;">${escapeHtml(code)}</p>
+      <p style="font-size:13px;color:#666;margin:0;">If you did not request this, you can ignore this email.</p>
+      ${emailBrandFooterHtml()}
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+async function sendPasswordResetCodeEmail(toEmail, userName, code) {
+  if (!isEmailEnabled()) return false;
+  try {
+    await sendMail(toEmail, `Your password reset code: ${code}`, buildPasswordResetCodeHtml(userName, code));
+    return true;
+  } catch (err) {
+    console.error(`Password reset email failed for ${toEmail}:`, err.message);
+    return false;
+  }
+}
+
 async function sendTestEmail(toEmail, userName) {
   if (!isEmailEnabled()) {
     throw new Error('Email not configured. Set RESEND_API_KEY (recommended on Render) or SMTP_EMAIL + SMTP_PASSWORD.');
@@ -351,4 +384,5 @@ module.exports = {
   sendTestEmail,
   sendTaskRejectedEmail,
   sendAccountCreatedEmail,
+  sendPasswordResetCodeEmail,
 };

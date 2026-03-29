@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { signToken, authMiddleware, resolveAuthDecoded } = require('../middleware/auth');
@@ -11,7 +12,7 @@ const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
 const ApprovalRequest = require('../models/ApprovalRequest');
-const { isEmailEnabled, sendAccountCreatedEmail } = require('../services/emailService');
+const { isEmailEnabled, sendAccountCreatedEmail, sendPasswordResetCodeEmail } = require('../services/emailService');
 
 const router = express.Router();
 
@@ -205,6 +206,103 @@ router.post('/register', async (req, res) => {
       return res.status(409).json({ error: 'Account setup conflict — try signing in' });
     }
     return res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+const FORGOT_CODE_TTL_MS = 15 * 60 * 1000;
+const FORGOT_RESEND_COOLDOWN_MS = 60 * 1000;
+const FORGOT_MAX_VERIFY_ATTEMPTS = 5;
+
+function clearPasswordResetState(doc) {
+  doc.passwordResetCodeHash = null;
+  doc.passwordResetExpiresAt = null;
+  doc.passwordResetAttempts = 0;
+  doc.passwordResetLastSentAt = null;
+}
+
+/** Same response whether or not the account exists (avoid email enumeration). */
+function forgotRequestGenericResponse(res) {
+  return res.json({
+    ok: true,
+    message: 'If an account exists for this email, a reset code will arrive shortly.',
+  });
+}
+
+router.post('/forgot-password/request', async (req, res) => {
+  try {
+    const em = String(req.body?.email || '').toLowerCase().trim();
+    if (!em) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    const doc = await User.findOne({ email: em });
+    if (!doc || !doc.isActive) {
+      return forgotRequestGenericResponse(res);
+    }
+    const now = Date.now();
+    if (doc.passwordResetLastSentAt) {
+      const elapsed = now - new Date(doc.passwordResetLastSentAt).getTime();
+      if (elapsed < FORGOT_RESEND_COOLDOWN_MS) {
+        const waitSec = Math.ceil((FORGOT_RESEND_COOLDOWN_MS - elapsed) / 1000);
+        return res.status(429).json({ error: `Please wait ${waitSec}s before requesting another code.` });
+      }
+    }
+    if (!isEmailEnabled()) {
+      return res.status(503).json({ error: 'Password reset email is not configured on this server.' });
+    }
+    const code = String(crypto.randomInt(0, 10000)).padStart(4, '0');
+    doc.passwordResetCodeHash = await bcrypt.hash(code, 10);
+    doc.passwordResetExpiresAt = new Date(now + FORGOT_CODE_TTL_MS);
+    doc.passwordResetAttempts = 0;
+    doc.passwordResetLastSentAt = new Date(now);
+    await doc.save();
+    const sent = await sendPasswordResetCodeEmail(doc.email, doc.name || doc.email, code);
+    if (!sent) {
+      clearPasswordResetState(doc);
+      await doc.save();
+      return res.status(500).json({ error: 'Could not send reset email. Try again later.' });
+    }
+    return forgotRequestGenericResponse(res);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Could not process reset request' });
+  }
+});
+
+router.post('/forgot-password/reset', async (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body || {};
+    const em = String(email || '').toLowerCase().trim();
+    const codeDigits = String(code || '').replace(/\D/g, '').slice(0, 4);
+    if (!em || codeDigits.length !== 4 || !newPassword || String(newPassword).length < 6) {
+      return res.status(400).json({ error: 'Email, 4-digit code, and new password (min 6 characters) are required' });
+    }
+    const doc = await User.findOne({ email: em });
+    if (!doc || !doc.isActive || !doc.passwordResetCodeHash || !doc.passwordResetExpiresAt) {
+      return res.status(400).json({ error: 'Invalid or expired code. Request a new code from the sign-in page.' });
+    }
+    if (new Date() > doc.passwordResetExpiresAt) {
+      clearPasswordResetState(doc);
+      await doc.save();
+      return res.status(400).json({ error: 'Code expired. Request a new one.' });
+    }
+    if ((doc.passwordResetAttempts || 0) >= FORGOT_MAX_VERIFY_ATTEMPTS) {
+      clearPasswordResetState(doc);
+      await doc.save();
+      return res.status(400).json({ error: 'Too many attempts. Request a new code.' });
+    }
+    const match = await bcrypt.compare(codeDigits, doc.passwordResetCodeHash);
+    if (!match) {
+      doc.passwordResetAttempts = (doc.passwordResetAttempts || 0) + 1;
+      await doc.save();
+      return res.status(400).json({ error: 'Invalid code.' });
+    }
+    doc.passwordHash = await bcrypt.hash(String(newPassword), 12);
+    clearPasswordResetState(doc);
+    await doc.save();
+    return res.json({ ok: true, message: 'Password updated. You can sign in now.' });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Could not reset password' });
   }
 });
 
