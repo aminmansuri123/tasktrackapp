@@ -18,7 +18,7 @@ function parseOrigins() {
 const SMTP_EMAIL = process.env.SMTP_EMAIL || '';
 const SMTP_PASSWORD = process.env.SMTP_PASSWORD || '';
 const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
-const SMTP_PORT = parseInt(process.env.SMTP_PORT || '465', 10);
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
 const REMINDER_CRON = process.env.REMINDER_CRON || '0 8 * * *';
 const SMTP_CONFIGURED = !!(SMTP_EMAIL && SMTP_PASSWORD);
 

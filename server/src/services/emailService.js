@@ -20,7 +20,11 @@ function getTransporter() {
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
     auth: { user: SMTP_EMAIL, pass: SMTP_PASSWORD },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
+  console.log(`[email] Transporter created: ${SMTP_HOST}:${SMTP_PORT} secure=${SMTP_PORT === 465}`);
   return _transporter;
 }
 
