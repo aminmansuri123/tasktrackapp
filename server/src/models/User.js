@@ -20,6 +20,13 @@ const userSchema = new mongoose.Schema(
     passwordResetExpiresAt: { type: Date, default: null },
     passwordResetAttempts: { type: Number, default: 0 },
     passwordResetLastSentAt: { type: Date, default: null },
+    failedLoginAttempts: { type: Number, default: 0 },
+    /** Too many bad passwords; cleared on successful login or password reset. */
+    loginLocked: { type: Boolean, default: false },
+    /** Server-side idle tracking for session timeout (optional; set on login and throttled on API use). */
+    lastActivityAt: { type: Date, default: null },
+    /** Last successful password login (optional). */
+    lastLoginAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
 const Workspace = require('../models/Workspace');
 const ReminderPreference = require('../models/ReminderPreference');
@@ -11,6 +12,7 @@ const {
   sendTaskAssignmentEmail,
   sendTaskRejectedEmail,
   sendAccountCreatedEmail,
+  sendTaskViewSummaryEmail,
 } = require('../services/emailService');
 const { EMAIL_CONFIGURED } = require('../config');
 const {
@@ -22,11 +24,23 @@ const {
   mergeIncomingUsersWithDbTenantRoster,
 } = require('../services/userSync');
 const { validateBody } = require('../middleware/validateBody');
-const { workspacePutSchema, parseWorkspaceRestoreBody } = require('../validation/schemas');
+const {
+  workspacePutSchema,
+  parseWorkspaceRestoreBody,
+  emailTaskViewSummarySchema,
+} = require('../validation/schemas');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '15.5.0';
+const EXPORT_VERSION = '16.0.0';
+
+const emailTaskViewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many email summary requests. Try again later.' },
+});
 
 /**
  * Determine workspace tenant root for the current request.
@@ -77,6 +91,9 @@ async function loadTenantUsers(tenantRoot, currentUserId) {
           is_active: doc.isActive,
           isMaster: doc.isMaster,
           enabledFeatures: Array.isArray(doc.enabledFeatures) ? doc.enabledFeatures : [],
+          last_login_at: doc.lastLoginAt
+            ? new Date(doc.lastLoginAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+            : '',
         });
       }
     } catch (e) {
@@ -227,6 +244,23 @@ router.post('/restore', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/updated-at', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.isMaster) {
+      return res.json({ updatedAt: null });
+    }
+    const tenantRoot = resolveTenantRoot(req);
+    const ws = await Workspace.findOne({ tenantRootUserId: tenantRoot }).select('updatedAt').lean();
+    if (!ws || !ws.updatedAt) {
+      return res.json({ updatedAt: null });
+    }
+    return res.json({ updatedAt: ws.updatedAt.toISOString() });
+  } catch (e) {
+    console.error('GET /workspace/updated-at', e);
+    return res.status(500).json({ error: 'Failed' });
+  }
+});
+
 router.get('/', authMiddleware, async (req, res) => {
   try {
     if (req.user.isMaster) {
@@ -281,7 +315,11 @@ router.get('/', authMiddleware, async (req, res) => {
       console.error('GET /workspace: could not persist into ws.data:', saveErr.message);
     }
 
-    return res.json(normalized);
+    const out = { ...normalized };
+    if (ws.updatedAt) {
+      out._workspaceUpdatedAt = ws.updatedAt.toISOString();
+    }
+    return res.json(out);
   } catch (e) {
     console.error('GET /workspace CRASH:', e);
     return res.status(500).json({ error: 'Failed to load workspace' });
@@ -356,6 +394,10 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
       usersReturned: users.length,
       userIds: users.map((u) => u.id),
     };
+
+    if (ws.updatedAt) {
+      merged._workspaceUpdatedAt = ws.updatedAt.toISOString();
+    }
 
     return res.json(merged);
   } catch (e) {
@@ -631,5 +673,51 @@ router.post('/send-test-reminder', authMiddleware, async (req, res) => {
     return res.status(500).json({ error: `Test email failed: ${detail}` });
   }
 });
+
+router.post(
+  '/email-task-view-summary',
+  authMiddleware,
+  emailTaskViewLimiter,
+  validateBody(emailTaskViewSummarySchema),
+  async (req, res) => {
+    try {
+      if (req.user.isMaster) {
+        return res.status(403).json({ error: 'Master account cannot send tenant task emails' });
+      }
+      if (!isEmailEnabled()) {
+        return res.status(503).json({ error: 'Email is not configured on this server.' });
+      }
+      const tenantRoot = resolveTenantRoot(req);
+      const { recipients } = req.body;
+      const sent = [];
+      const errors = [];
+      for (const block of recipients) {
+        const uid = block.userId;
+        const udoc = await User.findOne({ userId: uid });
+        if (!udoc || !userInTenantWorkspace(tenantRoot, udoc)) {
+          errors.push({ userId: uid, error: 'User is not in your organisation' });
+          continue;
+        }
+        if (!udoc.email) {
+          errors.push({ userId: uid, error: 'User has no email' });
+          continue;
+        }
+        const tasks = Array.isArray(block.tasks) ? block.tasks : [];
+        if (tasks.length === 0) continue;
+        try {
+          await sendTaskViewSummaryEmail(udoc.email, udoc.name || udoc.email, tasks);
+          sent.push(uid);
+        } catch (err) {
+          console.error('email-task-view-summary:', err.message);
+          errors.push({ userId: uid, error: err.message || 'Send failed' });
+        }
+      }
+      return res.json({ ok: true, sent, errors });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: 'Could not send emails' });
+    }
+  }
+);
 
 module.exports = router;

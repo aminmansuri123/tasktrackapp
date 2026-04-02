@@ -63,6 +63,28 @@ const requestApprovalSchema = z.object({
   email: z.string().trim().email().max(320),
 });
 
+const emailTaskViewSummarySchema = z.object({
+  recipients: z
+    .array(
+      z.object({
+        userId: z.preprocess((v) => {
+          if (typeof v === 'string') return parseInt(v, 10);
+          return v;
+        }, z.number().int().positive()),
+        tasks: z
+          .array(
+            z.object({
+              title: z.string().max(2000),
+              due: z.string().max(120).optional(),
+              overdue: z.boolean().optional(),
+            })
+          )
+          .max(5000),
+      })
+    )
+    .max(200),
+});
+
 /**
  * Validate backup restore body: either a workspace object or { data: workspace }.
  * @returns {{ ok: true, data: object } | { ok: false, details: object }}
@@ -85,5 +107,6 @@ module.exports = {
   forgotPasswordResetSchema,
   changePasswordSchema,
   requestApprovalSchema,
+  emailTaskViewSummarySchema,
   parseWorkspaceRestoreBody,
 };

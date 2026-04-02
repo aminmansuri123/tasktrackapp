@@ -1974,6 +1974,8 @@
                         <input type="date" class="form-control" id="journalDate" onchange="journalLoadDate()" style="width: 150px;">
                         <button class="btn btn-secondary" onclick="journalNextDay()">Next →</button>
                         <input type="text" class="form-control" id="journalSearch" placeholder="Search journal..." onkeyup="debouncedJournalSearch()" style="width: 200px;">
+                        <button type="button" class="btn btn-success" onclick="journalSaveNow()">Save</button>
+                        <span id="journalSaveStatus" style="font-size: 13px; min-height: 18px;"></span>
                         <button class="btn btn-primary" onclick="journalExportToWord()">Export to Word</button>
                     </div>
                 </div>
@@ -2165,7 +2167,12 @@
                         <input type="text" class="form-control" id="newHolidayDesc" placeholder="Description">
                         <button class="btn btn-primary" onclick="addHoliday()">Add</button>
                     </div>
-                    <div id="holidaysList" style="margin-top: 15px;"></div>
+                    <div style="margin-top: 12px;">
+                        <button type="button" class="btn btn-secondary" id="holidaysListToggleBtn" onclick="toggleHolidaysListVisibility()">Show holidays</button>
+                    </div>
+                    <div id="holidaysListWrap" style="display: none; margin-top: 15px;">
+                        <div id="holidaysList"></div>
+                    </div>
                 </div>
 
                 <div class="card" style="margin-bottom: 20px;">
@@ -2418,6 +2425,8 @@
                             <option value="daily">Daily</option>
                             <option value="weekly">Weekly</option>
                             <option value="monthly">Monthly</option>
+                            <option value="quarterly">Quarterly</option>
+                            <option value="halfyearly">Half-yearly</option>
                             <option value="yearly">Yearly</option>
                         </select>
                     </div>

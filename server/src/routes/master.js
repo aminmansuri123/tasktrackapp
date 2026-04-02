@@ -331,6 +331,8 @@ router.get('/registration-policy', authMiddleware, requireMaster, async (_req, r
       registrationMode: s.registrationMode,
       allowedEmails: s.allowedEmails || [],
       allowedDomains: s.allowedDomains || [],
+      sessionIdleTimeoutMinutes:
+        s.sessionIdleTimeoutMinutes != null ? Number(s.sessionIdleTimeoutMinutes) || 0 : 0,
     });
   } catch (e) {
     console.error(e);
@@ -348,11 +350,20 @@ router.put('/registration-policy', authMiddleware, requireMaster, async (req, re
     s.registrationMode = parsed.registrationMode;
     s.allowedEmails = parsed.allowedEmails;
     s.allowedDomains = parsed.allowedDomains;
+    if (req.body && req.body.sessionIdleTimeoutMinutes !== undefined && req.body.sessionIdleTimeoutMinutes !== null) {
+      const n = parseInt(String(req.body.sessionIdleTimeoutMinutes), 10);
+      if (Number.isNaN(n) || n < 0 || n > 10080) {
+        return res.status(400).json({ error: 'sessionIdleTimeoutMinutes must be between 0 and 10080 (minutes)' });
+      }
+      s.sessionIdleTimeoutMinutes = n;
+    }
     await s.save();
     return res.json({
       registrationMode: s.registrationMode,
       allowedEmails: s.allowedEmails,
       allowedDomains: s.allowedDomains,
+      sessionIdleTimeoutMinutes:
+        s.sessionIdleTimeoutMinutes != null ? Number(s.sessionIdleTimeoutMinutes) || 0 : 0,
     });
   } catch (e) {
     console.error(e);
@@ -372,6 +383,8 @@ router.post('/users/:userId/password', authMiddleware, requireMaster, async (req
       return res.status(404).json({ error: 'User not found' });
     }
     target.passwordHash = await bcrypt.hash(String(newPassword), 12);
+    target.loginLocked = false;
+    target.failedLoginAttempts = 0;
     await target.save();
     return res.json({ ok: true });
   } catch (e) {

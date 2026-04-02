@@ -1,4 +1,4 @@
-const APP_VERSION = '15.6.1';
+const APP_VERSION = '16.0.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -11,6 +11,28 @@ const API_AUTH_TOKEN_KEY = 'tasktrack_api_auth_token';
 function clearApiAuthToken() {
     sessionStorage.removeItem(API_AUTH_TOKEN_KEY);
     localStorage.removeItem(API_AUTH_TOKEN_KEY);
+}
+
+const LAST_LOGIN_EMAIL_KEY = 'tasktrack_last_login_email';
+
+function rememberLastLoginEmail(email) {
+    try {
+        const e = String(email || '').trim();
+        if (e) localStorage.setItem(LAST_LOGIN_EMAIL_KEY, e);
+    } catch {
+        /* ignore */
+    }
+}
+
+function hydrateLastLoginEmail() {
+    try {
+        const el = document.getElementById('loginEmail');
+        if (!el || el.value) return;
+        const v = localStorage.getItem(LAST_LOGIN_EMAIL_KEY);
+        if (v) el.value = v;
+    } catch {
+        /* ignore */
+    }
 }
 
 function rememberPendingUserPasswordForSync(userId, plainPassword) {
@@ -68,6 +90,9 @@ let __lastWorkspacePutError = '';
 /** Bumped on each tenant save while syncing; avoids applying a stale PUT response after newer local edits (e.g. rapid task creates). */
 let __workspaceMutationGen = 0;
 const WORKSPACE_PUSH_DEBOUNCE_MS = 400;
+/** ISO timestamp from last workspace GET/PUT (tenant sync across tabs/devices). */
+let __workspaceRemoteUpdatedAt = null;
+let __workspacePollTimer = null;
 
 function isApiMode() {
     return typeof window.API_BASE_URL === 'string' && window.API_BASE_URL.trim().length > 0;
@@ -77,13 +102,147 @@ function apiBase() {
     return String(window.API_BASE_URL || '').replace(/\/$/, '');
 }
 
+let __clientIdleTimer = null;
+let __lastClientActivityBump = 0;
+
+function stopClientIdleWatch() {
+    clearTimeout(__clientIdleTimer);
+    __clientIdleTimer = null;
+}
+
+function wireClientIdleListenersOnce() {
+    if (window.__tasktrackIdleWired) return;
+    window.__tasktrackIdleWired = true;
+    const bump = () => bumpClientActivityFromEvents();
+    ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'].forEach((ev) => {
+        window.addEventListener(ev, bump, { passive: true });
+    });
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') bump();
+    });
+}
+
+function bumpClientActivityFromEvents() {
+    if (!currentUser || !isApiMode()) return;
+    const min = Number(currentUser.sessionIdleTimeoutMinutes);
+    if (!min || min <= 0) return;
+    const now = Date.now();
+    if (now - __lastClientActivityBump < 8000) return;
+    __lastClientActivityBump = now;
+    clearTimeout(__clientIdleTimer);
+    __clientIdleTimer = setTimeout(() => {
+        void forceSessionEndFromServer('You were signed out after a period of inactivity.');
+    }, min * 60 * 1000);
+}
+
+function startClientIdleWatch() {
+    stopClientIdleWatch();
+    if (!currentUser || !isApiMode()) return;
+    const min = Number(currentUser.sessionIdleTimeoutMinutes);
+    if (!min || min <= 0) return;
+    wireClientIdleListenersOnce();
+    __lastClientActivityBump = Date.now();
+    __clientIdleTimer = setTimeout(() => {
+        void forceSessionEndFromServer('You were signed out after a period of inactivity.');
+    }, min * 60 * 1000);
+}
+
+function stopWorkspacePoll() {
+    clearInterval(__workspacePollTimer);
+    __workspacePollTimer = null;
+}
+
+async function tickWorkspaceRemoteSync() {
+    if (!isApiMode() || !currentUser || currentUser.isMaster) return;
+    try {
+        const res = await apiFetch('/api/workspace/updated-at', { skipSessionSweep: true });
+        if (!res.ok) return;
+        const j = await res.json().catch(() => ({}));
+        const remote = j.updatedAt;
+        if (!remote) return;
+        if (__workspaceRemoteUpdatedAt == null) {
+            __workspaceRemoteUpdatedAt = remote;
+            return;
+        }
+        if (new Date(remote) > new Date(__workspaceRemoteUpdatedAt)) {
+            await apiPullWorkspace();
+            try {
+                init();
+            } catch (e) {
+                console.error('init after remote workspace sync:', e);
+            }
+        }
+    } catch (e) {
+        console.warn('workspace remote sync poll:', e);
+    }
+}
+
+function startWorkspacePoll() {
+    stopWorkspacePoll();
+    if (!isApiMode() || !currentUser || currentUser.isMaster) return;
+    if (!window.__workspacePollVisWired) {
+        window.__workspacePollVisWired = true;
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') void tickWorkspaceRemoteSync();
+        });
+    }
+    __workspacePollTimer = setInterval(() => void tickWorkspaceRemoteSync(), 45000);
+}
+
+async function forceSessionEndFromServer(message) {
+    if (!currentUser) return;
+    if (window.__tasktrackSessionEnding) return;
+    window.__tasktrackSessionEnding = true;
+    try {
+        stopWorkspacePoll();
+        stopClientIdleWatch();
+        try {
+            await fetch(apiBase() + '/api/auth/logout', { method: 'POST', credentials: 'include' });
+        } catch {
+            /* ignore */
+        }
+        __workspaceCache = null;
+        __workspaceRemoteUpdatedAt = null;
+        clearPendingPasswordsForSync();
+        clearApiAuthToken();
+        sessionStorage.removeItem('currentUser');
+        currentUser = null;
+        document.body.classList.remove('user-admin');
+        checkAuth();
+        if (message) {
+            showError('loginError', message);
+        }
+    } finally {
+        window.__tasktrackSessionEnding = false;
+    }
+}
+
 async function apiFetch(path, options = {}) {
     const url = apiBase() + path;
     const headers = { ...(options.headers || {}) };
     if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json';
     }
-    return fetch(url, { ...options, credentials: 'include', headers });
+    const res = await fetch(url, { ...options, credentials: 'include', headers });
+    if (options.skipSessionSweep) {
+        return res;
+    }
+    if ((res.status === 401 || res.status === 403) && isApiMode() && currentUser) {
+        let j = null;
+        try {
+            j = await res.clone().json();
+        } catch {
+            j = null;
+        }
+        if (j && (j.code === 'SESSION_IDLE' || j.code === 'LOGIN_LOCKED')) {
+            const msg =
+                j.code === 'SESSION_IDLE'
+                    ? (j.error || 'Session expired due to inactivity.')
+                    : (j.error || 'Account locked. Use Forgot password to unlock.');
+            void forceSessionEndFromServer(msg);
+        }
+    }
+    return res;
 }
 
 async function apiPullWorkspace() {
@@ -97,6 +256,10 @@ async function apiPullWorkspace() {
     if (body._debug) {
         console.log('[workspace _debug]', JSON.stringify(body._debug));
     }
+    if (body._workspaceUpdatedAt) {
+        __workspaceRemoteUpdatedAt = body._workspaceUpdatedAt;
+    }
+    delete body._workspaceUpdatedAt;
     __workspaceCache = normalizeData(body);
     applyFeatureTabVisibility();
 }
@@ -132,6 +295,10 @@ async function putWorkspaceCacheToServer() {
             return false;
         }
         const body = await res.json();
+        if (body._workspaceUpdatedAt) {
+            __workspaceRemoteUpdatedAt = body._workspaceUpdatedAt;
+        }
+        delete body._workspaceUpdatedAt;
         const normalized = normalizeData(body);
         if (genAtPutStart !== __workspaceMutationGen) {
             // Local workspace changed while this request was in flight; applying the body would drop newer edits.
@@ -740,7 +907,11 @@ function checkAuth() {
         const cpBtn = document.getElementById('changePasswordBtn');
         if (cpBtn) cpBtn.style.display = isApiMode() ? 'inline-block' : 'none';
         applyFeatureTabVisibility();
+        startClientIdleWatch();
+        startWorkspacePoll();
     } else {
+        stopWorkspacePoll();
+        stopClientIdleWatch();
         currentUser = null;
         document.body.classList.toggle('app-api-mode', isApiMode());
         document.getElementById('loginModal').classList.add('active');
@@ -752,7 +923,6 @@ function checkAuth() {
         const em = document.getElementById('loginEmail');
         const nm = document.getElementById('loginName');
         if (pw) pw.value = '';
-        if (em) em.value = '';
         if (nm) nm.value = '';
         const lat = document.getElementById('loginAccountType');
         if (lat) lat.value = 'org_admin';
@@ -761,6 +931,7 @@ function checkAuth() {
         const fp = document.getElementById('loginForgotPanel');
         if (fp) fp.classList.add('hidden');
         setLoginPanelMode('signin');
+        hydrateLastLoginEmail();
     }
 }
 
@@ -1121,6 +1292,7 @@ async function login() {
                         throw meParse;
                     }
                     sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    rememberLastLoginEmail(email);
                     try {
                         await apiPullWorkspace();
                     } catch (pullErr) {
@@ -1146,7 +1318,9 @@ async function login() {
         }
         currentUser = body.user;
         if (body.smtpConfigured != null) currentUser.smtpConfigured = body.smtpConfigured;
+        if (body.sessionIdleTimeoutMinutes != null) currentUser.sessionIdleTimeoutMinutes = body.sessionIdleTimeoutMinutes;
         sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+        rememberLastLoginEmail(email);
         try {
             await apiPullWorkspace();
         } catch (pullErr) {
@@ -1263,6 +1437,7 @@ async function register() {
                         throw meParse;
                     }
                     sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+                    rememberLastLoginEmail(email);
                     try {
                         await apiPullWorkspace();
                     } catch (pullErr) {
@@ -1287,7 +1462,10 @@ async function register() {
             return;
         }
         currentUser = body.user;
+        if (body.smtpConfigured != null) currentUser.smtpConfigured = body.smtpConfigured;
+        if (body.sessionIdleTimeoutMinutes != null) currentUser.sessionIdleTimeoutMinutes = body.sessionIdleTimeoutMinutes;
         sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+        rememberLastLoginEmail(email);
         try {
             await apiPullWorkspace();
         } catch (pullErr) {
@@ -1412,15 +1590,18 @@ async function submitChangePassword(event) {
 }
 
 async function logout() {
+    stopWorkspacePoll();
+    stopClientIdleWatch();
     if (isApiMode()) {
         try {
-            await apiFetch('/api/auth/logout', { method: 'POST' });
+            await apiFetch('/api/auth/logout', { method: 'POST', skipSessionSweep: true });
         } catch (_) {
             /* ignore */
         }
         __workspaceCache = null;
         clearPendingPasswordsForSync();
     }
+    __workspaceRemoteUpdatedAt = null;
     clearApiAuthToken();
     sessionStorage.removeItem('currentUser');
     currentUser = null;
@@ -4491,7 +4672,7 @@ function openInteractiveTaskPopup(taskId) {
                     ${currentUser.role === 'admin' ? `
                         <button class="btn btn-info" onclick="event.stopPropagation(); copyTask(${task.id}); closeInteractiveTaskPopup();" 
                                 style="padding: 10px 20px; background: #17a2b8; color: white; border: none;">Copy Task</button>
-                        <button class="btn btn-danger" onclick="event.stopPropagation(); if(confirm('Are you sure you want to delete this task?')) { deleteTask(${task.id}); closeInteractiveTaskPopup(); renderDashboard(); renderInteractiveDashboard(); }" 
+                        <button class="btn btn-danger" onclick="event.stopPropagation(); deleteTask(${task.id}); closeInteractiveTaskPopup(); renderDashboard(); renderInteractiveDashboard();" 
                                 style="padding: 10px 20px;">Delete Task</button>
                     ` : ''}
                 </div>
@@ -4510,7 +4691,7 @@ function openInteractiveTaskPopup(taskId) {
                             style="padding: 10px 20px;">Edit Task</button>
                     <button class="btn btn-info" onclick="event.stopPropagation(); copyTask(${task.id}); closeInteractiveTaskPopup();" 
                             style="padding: 10px 20px; background: #17a2b8; color: white; border: none;">Copy Task</button>
-                    <button class="btn btn-danger" onclick="event.stopPropagation(); if(confirm('Are you sure you want to delete this task?')) { deleteTask(${task.id}); closeInteractiveTaskPopup(); renderInteractiveDashboard(); }" 
+                    <button class="btn btn-danger" onclick="event.stopPropagation(); deleteTask(${task.id}); closeInteractiveTaskPopup(); renderInteractiveDashboard();" 
                             style="padding: 10px 20px;">Delete Task</button>
                 </div>
             </div>
@@ -4526,7 +4707,7 @@ function openInteractiveTaskPopup(taskId) {
                     <button class="btn btn-info" onclick="event.stopPropagation(); copyTask(${task.id}); closeInteractiveTaskPopup();" 
                             style="padding: 10px 20px; background: #17a2b8; color: white; border: none;">Copy Task</button>
                     ${currentUser.role === 'admin' ? `
-                        <button class="btn btn-danger" onclick="event.stopPropagation(); if(confirm('Are you sure you want to delete this task?')) { deleteTask(${task.id}); closeInteractiveTaskPopup(); renderInteractiveDashboard(); }" 
+                        <button class="btn btn-danger" onclick="event.stopPropagation(); deleteTask(${task.id}); closeInteractiveTaskPopup(); renderInteractiveDashboard();" 
                                 style="padding: 10px 20px;">Delete Task</button>
                     ` : ''}
                 </div>
@@ -4863,39 +5044,61 @@ function calculateRecurringDueDate(startDate, frequency, dueDateType, dueDay) {
     return `${year}-${month}-${day}`;
 }
 
-function adjustToWorkingDay(date) {
-    const data = getData();
-    const holidays = data.holidays.map(h => h.date);
-
+function adjustToWorkingDayWithHolidayList(date, holidayDateStrings) {
+    const holidays = Array.isArray(holidayDateStrings) ? holidayDateStrings : [];
     let checkDate = new Date(date);
-    checkDate.setHours(0, 0, 0, 0); // Reset time to midnight
+    checkDate.setHours(0, 0, 0, 0);
     let attempts = 0;
 
-    while (attempts < 30) { // Max 30 days forward
+    while (attempts < 30) {
         const dayOfWeek = checkDate.getDay();
         const dateStr = formatDateString(checkDate);
 
-        // Check if it's a weekend (Sunday = 0, Saturday = 6)
-        // If it's Saturday or Sunday, move to next day
         if (dayOfWeek === 0 || dayOfWeek === 6) {
             checkDate.setDate(checkDate.getDate() + 1);
             attempts++;
             continue;
         }
 
-        // Check if it's a holiday
-        // If it's a company holiday, move to next day
         if (holidays.includes(dateStr)) {
             checkDate.setDate(checkDate.getDate() + 1);
             attempts++;
             continue;
         }
 
-        // It's a working day (Monday-Friday and not a holiday)
         return checkDate;
     }
 
-    return date; // Fallback to original date if no working day found in 30 days
+    return date;
+}
+
+function adjustToWorkingDay(date) {
+    const data = getData();
+    const holidays = (data.holidays || []).map(h => h.date);
+    return adjustToWorkingDayWithHolidayList(date, holidays);
+}
+
+/** After holidays change, move task due dates that fall on a weekend or listed holiday. */
+function shiftTaskDueFieldsIfNonWorking(data) {
+    const hol = (data.holidays || []).map(h => h.date);
+    for (const task of data.tasks || []) {
+        if (task.removed_at) continue;
+        for (const field of ['due_date', 'next_due_date']) {
+            const v = task[field];
+            if (!v || typeof v !== 'string') continue;
+            const parts = v.split('-');
+            if (parts.length !== 3) continue;
+            const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+            d.setHours(0, 0, 0, 0);
+            const dayOfWeek = d.getDay();
+            const onWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+            const onHoliday = hol.includes(v);
+            if (onWeekend || onHoliday) {
+                const adj = adjustToWorkingDayWithHolidayList(d, hol);
+                task[field] = formatDateString(adj);
+            }
+        }
+    }
 }
 
 function calculateNextRecurrenceDate(task) {
@@ -4922,6 +5125,32 @@ function calculateNextRecurrenceDate(task) {
             // Calculate based on working day or calendar day
             if (dueDateType === 'working_day') {
                 nextDate = getNthWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth(), dueDay);
+            } else if (dueDateType === 'last_working_day') {
+                nextDate = getLastWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth());
+            } else {
+                const lastDayOfMonth = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
+                const dayToUse = Math.min(dueDay, lastDayOfMonth);
+                nextDate.setDate(dayToUse);
+            }
+            break;
+        case 'quarterly':
+            nextDate.setMonth(nextDate.getMonth() + 3);
+            if (dueDateType === 'working_day') {
+                nextDate = getNthWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth(), dueDay);
+            } else if (dueDateType === 'last_working_day') {
+                nextDate = getLastWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth());
+            } else {
+                const lastDayOfMonth = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
+                const dayToUse = Math.min(dueDay, lastDayOfMonth);
+                nextDate.setDate(dayToUse);
+            }
+            break;
+        case 'halfyearly':
+            nextDate.setMonth(nextDate.getMonth() + 6);
+            if (dueDateType === 'working_day') {
+                nextDate = getNthWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth(), dueDay);
+            } else if (dueDateType === 'last_working_day') {
+                nextDate = getLastWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth());
             } else {
                 const lastDayOfMonth = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
                 const dayToUse = Math.min(dueDay, lastDayOfMonth);
@@ -4932,6 +5161,8 @@ function calculateNextRecurrenceDate(task) {
             nextDate.setFullYear(nextDate.getFullYear() + 1);
             if (dueDateType === 'working_day') {
                 nextDate = getNthWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth(), dueDay);
+            } else if (dueDateType === 'last_working_day') {
+                nextDate = getLastWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth());
             } else {
                 const lastDayOfYearMonth = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
                 const dayToUseYear = Math.min(dueDay, lastDayOfYearMonth);
@@ -4972,6 +5203,30 @@ function calculateNextRecurrenceDateForInstance(task, currentDueDateStr) {
         case 'monthly':
             nextDate.setMonth(nextDate.getMonth() + 1);
             // Calculate based on working day or calendar day
+            if (dueDateType === 'working_day') {
+                nextDate = getNthWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth(), dueDay);
+            } else if (dueDateType === 'last_working_day') {
+                nextDate = getLastWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth());
+            } else {
+                const lastDayOfMonth = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
+                const dayToUse = Math.min(dueDay, lastDayOfMonth);
+                nextDate.setDate(dayToUse);
+            }
+            break;
+        case 'quarterly':
+            nextDate.setMonth(nextDate.getMonth() + 3);
+            if (dueDateType === 'working_day') {
+                nextDate = getNthWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth(), dueDay);
+            } else if (dueDateType === 'last_working_day') {
+                nextDate = getLastWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth());
+            } else {
+                const lastDayOfMonth = new Date(nextDate.getFullYear(), nextDate.getMonth() + 1, 0).getDate();
+                const dayToUse = Math.min(dueDay, lastDayOfMonth);
+                nextDate.setDate(dayToUse);
+            }
+            break;
+        case 'halfyearly':
+            nextDate.setMonth(nextDate.getMonth() + 6);
             if (dueDateType === 'working_day') {
                 nextDate = getNthWorkingDayOfMonth(nextDate.getFullYear(), nextDate.getMonth(), dueDay);
             } else if (dueDateType === 'last_working_day') {
@@ -5747,7 +6002,7 @@ function renderUsers() {
     const headRow = document.getElementById('userMgmtTableHeadRow');
     if (headRow) {
         if (masterReadOnly) {
-            headRow.innerHTML = '<th>Name</th><th>Email</th><th>Role</th><th>Assigned org (account admin)</th><th>Status</th><th>Actions</th>';
+            headRow.innerHTML = '<th>Name</th><th>Email</th><th>Role</th><th>Assigned org (account admin)</th><th>Last login</th><th>Status</th><th>Actions</th>';
         } else {
             headRow.innerHTML = '<th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th>';
         }
@@ -5758,11 +6013,14 @@ function renderUsers() {
         ? (data.users || []).filter(u => userPassesMasterAccountFilter(u, mode))
         : (data.users || []);
 
-    const colCount = masterReadOnly ? 6 : 5;
+    const colCount = masterReadOnly ? 7 : 5;
     const html = listUsers.map(user => {
         const active = user.is_active !== false;
         const tenantTd = masterReadOnly
             ? `<td>${escapeHtml(user.tenant_admin_label != null && user.tenant_admin_label !== '' ? user.tenant_admin_label : '—')}</td>`
+            : '';
+        const lastLoginTd = masterReadOnly
+            ? `<td style="font-size:12px;color:#555;">${escapeHtml(user.last_login_at != null && user.last_login_at !== '' ? user.last_login_at : '—')}</td>`
             : '';
         return `
         <tr>
@@ -5770,6 +6028,7 @@ function renderUsers() {
             <td>${escapeHtml(user.email)}</td>
             <td><span class="badge ${user.role === 'admin' ? 'badge-high' : 'badge-low'}">${user.role}</span></td>
             ${tenantTd}
+            ${lastLoginTd}
             <td><span class="badge ${active ? 'badge-completed' : 'badge-pending'}">${active ? 'Active' : 'Disabled'}</span></td>
             <td>${masterReadOnly
         ? '<span style="color:#888;font-size:12px;">Use Master password reset below</span>'
@@ -6007,6 +6266,11 @@ function renderSettings() {
                     <label>Allowed domains (one per line, e.g. ameyalogistics.com) — checked second. Subdomains allowed automatically.</label>
                     <textarea id="masterRegDomains" class="form-control" rows="3" placeholder="company.com"></textarea>
                 </div>
+                <div class="form-group">
+                    <label for="masterSessionIdleMinutes">Session idle timeout (minutes)</label>
+                    <input type="number" id="masterSessionIdleMinutes" class="form-control" min="0" max="10080" step="1" style="max-width:140px;">
+                    <p style="color:#666;font-size:12px;margin-top:4px;">0 = disabled. The server signs users out after this many minutes without API activity (JWT may still be unexpired).</p>
+                </div>
                 <button type="button" class="btn btn-primary" onclick="saveMasterRegistrationPolicy()">Save registration rules</button>
                 <h3 style="margin-top:24px;">Pending approval requests</h3>
                 <p style="color:#666;font-size:13px;">Users who don't match email/domain rules can request approval. Approving adds their email to the allowed list.</p>
@@ -6123,6 +6387,7 @@ function renderSettings() {
         </div>
     `).join('');
     document.getElementById('holidaysList').innerHTML = holidaysHtml || '<p style="color: #999;">No holidays</p>';
+    hydrateHolidaysListVisibility();
 
     // Set auto-export checkbox state
     const autoExportCheckbox = document.getElementById('autoExportEnabled');
@@ -6360,6 +6625,8 @@ async function masterRegistrationPolicyHydrate() {
         const td = document.getElementById('masterRegDomains');
         if (te && Array.isArray(p.allowedEmails)) te.value = p.allowedEmails.join('\n');
         if (td && Array.isArray(p.allowedDomains)) td.value = p.allowedDomains.join('\n');
+        const idleEl = document.getElementById('masterSessionIdleMinutes');
+        if (idleEl) idleEl.value = p.sessionIdleTimeoutMinutes != null ? String(p.sessionIdleTimeoutMinutes) : '0';
     } catch (e) {
         console.error(e);
     }
@@ -6414,10 +6681,13 @@ async function saveMasterRegistrationPolicy() {
     const domainsRaw = (document.getElementById('masterRegDomains') && document.getElementById('masterRegDomains').value) || '';
     const allowedEmails = emailsRaw.split(/[\n,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
     const allowedDomains = domainsRaw.split(/[\n,;]+/).map(s => s.trim().toLowerCase().replace(/^@+/, '')).filter(Boolean);
+    const idleEl = document.getElementById('masterSessionIdleMinutes');
+    let sessionIdleTimeoutMinutes = idleEl ? parseInt(idleEl.value, 10) : 0;
+    if (Number.isNaN(sessionIdleTimeoutMinutes) || sessionIdleTimeoutMinutes < 0) sessionIdleTimeoutMinutes = 0;
     try {
         const res = await apiFetch('/api/master/registration-policy', {
             method: 'PUT',
-            body: JSON.stringify({ registrationMode: mode, allowedEmails, allowedDomains }),
+            body: JSON.stringify({ registrationMode: mode, allowedEmails, allowedDomains, sessionIdleTimeoutMinutes }),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -6833,6 +7103,34 @@ function removeSegregation(id) {
     renderSettings();
 }
 
+function toggleHolidaysListVisibility() {
+    const wrap = document.getElementById('holidaysListWrap');
+    const btn = document.getElementById('holidaysListToggleBtn');
+    if (!wrap) return;
+    const show = wrap.style.display === 'none' || wrap.style.display === '';
+    wrap.style.display = show ? 'block' : 'none';
+    try {
+        localStorage.setItem('tasktrack_holidays_list_visible', show ? '1' : '0');
+    } catch {
+        /* ignore */
+    }
+    if (btn) btn.textContent = show ? 'Hide holidays' : 'Show holidays';
+}
+
+function hydrateHolidaysListVisibility() {
+    const wrap = document.getElementById('holidaysListWrap');
+    const btn = document.getElementById('holidaysListToggleBtn');
+    if (!wrap) return;
+    let show = false;
+    try {
+        show = localStorage.getItem('tasktrack_holidays_list_visible') === '1';
+    } catch {
+        show = false;
+    }
+    wrap.style.display = show ? 'block' : 'none';
+    if (btn) btn.textContent = show ? 'Hide holidays' : 'Show holidays';
+}
+
 function addHoliday() {
     const date = document.getElementById('newHolidayDate').value;
     const description = document.getElementById('newHolidayDesc').value.trim();
@@ -6842,6 +7140,7 @@ function addHoliday() {
     updateData(data => {
         const maxId = data.holidays.length > 0 ? Math.max(...data.holidays.map(h => h.id)) : 0;
         data.holidays.push({ id: maxId + 1, date, description: description || 'Holiday' });
+        shiftTaskDueFieldsIfNonWorking(data);
     });
 
     document.getElementById('newHolidayDate').value = '';
@@ -6854,6 +7153,7 @@ function removeHoliday(id) {
 
     updateData(data => {
         data.holidays = data.holidays.filter(h => h.id !== id);
+        shiftTaskDueFieldsIfNonWorking(data);
     });
 
     renderSettings();
@@ -6871,6 +7171,67 @@ function updateMonthFilter() {
     if (fromEl && toEl && fromEl.value > toEl.value) toEl.value = fromEl.value;
 
     renderInteractiveDashboard();
+}
+
+function buildInteractiveEmailRecipientsPayload(filteredTasks) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const byUser = new Map();
+    for (const t of filteredTasks) {
+        const aid = Number(t.assigned_to);
+        if (Number.isNaN(aid)) continue;
+        if (!byUser.has(aid)) byUser.set(aid, []);
+        const dueRaw = t.due_date || t.next_due_date || '';
+        let overdue = false;
+        if (dueRaw && !isTaskCompleted(t) && t.task_action !== 'in_process' && t.task_action !== 'not_done') {
+            const dateParts = dueRaw.split('-');
+            const taskDate = new Date(parseInt(dateParts[0], 10), parseInt(dateParts[1], 10) - 1, parseInt(dateParts[2], 10));
+            taskDate.setHours(0, 0, 0, 0);
+            if (taskDate < today) overdue = true;
+        }
+        byUser.get(aid).push({
+            title: t.task_name || 'Task',
+            due: dueRaw ? formatDateDisplay(dueRaw) : '',
+            overdue,
+        });
+    }
+    return [...byUser.entries()].map(([userId, tasks]) => ({ userId, tasks }));
+}
+
+async function emailInteractiveTaskViewToAssignees() {
+    if (!isApiMode() || !currentUser || currentUser.isMaster) {
+        alert('Use a tenant account with the API to email Task View summaries.');
+        return;
+    }
+    const filteredTasks = window.currentFilteredTasks || [];
+    if (filteredTasks.length === 0) {
+        alert('No tasks in the current Task View filters.');
+        return;
+    }
+    const recipients = buildInteractiveEmailRecipientsPayload(filteredTasks);
+    if (recipients.length === 0) {
+        alert('No assignees found for the filtered tasks.');
+        return;
+    }
+    try {
+        const res = await apiFetch('/api/workspace/email-task-view-summary', {
+            method: 'POST',
+            body: JSON.stringify({ recipients }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            alert(j.error || `Request failed (${res.status})`);
+            return;
+        }
+        const okCount = (j.sent && j.sent.length) || 0;
+        const errPart = Array.isArray(j.errors) && j.errors.length
+            ? ` Some could not be sent: ${j.errors.map(e => `${e.userId}: ${e.error}`).join('; ')}`
+            : '';
+        alert(`Sent ${okCount} email(s).${errPart}`);
+    } catch (e) {
+        console.error(e);
+        alert('Network error.');
+    }
 }
 
 // Interactive Dashboard
@@ -7081,9 +7442,15 @@ function renderInteractiveDashboard() {
     // Store filtered tasks for export
     window.currentFilteredTasks = filteredTasks;
 
+    const emailBtn =
+        isApiMode() && currentUser && !currentUser.isMaster
+            ? `<button type="button" class="btn btn-secondary" onclick="emailInteractiveTaskViewToAssignees()" style="margin-left:12px;">Email summary to assignees</button>`
+            : '';
+
     document.getElementById('interactiveDashboardContent').innerHTML = `
-        <div style="margin-bottom: 20px;">
-            <h3>Filtered Results: ${filteredTasks.length} task(s)</h3>
+        <div style="margin-bottom: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;">
+            <h3 style="margin: 0;">Filtered Results: ${filteredTasks.length} task(s)</h3>
+            ${emailBtn}
         </div>
         ${tasksHtml}
     `;
@@ -10443,6 +10810,25 @@ function journalSaveCurrent() {
         if (!data.journal || typeof data.journal !== 'object') data.journal = {};
         data.journal[dateStr] = content;
     });
+}
+
+async function journalSaveNow() {
+    journalSaveCurrent();
+    if (isApiMode() && currentUser && !currentUser.isMaster) {
+        try {
+            await flushWorkspaceToApiNow();
+        } catch (e) {
+            console.error('Journal save sync:', e);
+        }
+    }
+    const st = document.getElementById('journalSaveStatus');
+    if (st) {
+        st.textContent = 'Saved.';
+        st.style.color = '#2e7d32';
+        setTimeout(() => {
+            st.textContent = '';
+        }, 2500);
+    }
 }
 
 function journalDoSearch() {

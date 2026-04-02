@@ -141,9 +141,24 @@ async function main() {
 
   const allowedOrigins = parseOrigins();
 
+  /*
+   * Static SPA hosts (e.g. GitHub Pages) cannot set arbitrary response headers.
+   * For CSP/HSTS on the HTML app, use a CDN/reverse proxy (Cloudflare rules, Netlify _headers, etc.)
+   * or a weak meta CSP. This process is JSON-only; Helmet hardens the API surface.
+   */
   app.use(
     helmet({
       crossOriginResourcePolicy: { policy: 'cross-origin' },
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          defaultSrc: ["'none'"],
+          frameAncestors: ["'none'"],
+        },
+      },
+      hsts: isProduction ? { maxAge: 31536000, includeSubDomains: true } : false,
+      frameguard: { action: 'deny' },
+      hidePoweredBy: true,
     })
   );
 

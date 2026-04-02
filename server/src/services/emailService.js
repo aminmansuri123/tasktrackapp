@@ -377,6 +377,41 @@ async function sendTestEmail(toEmail, userName) {
   return true;
 }
 
+/**
+ * Task View “email filtered list” — one message per assignee with a simple HTML table.
+ * @param {string} toEmail
+ * @param {string} userName
+ * @param {{ title: string, due?: string, overdue?: boolean }[]} tasks
+ */
+async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
+  if (!isEmailEnabled()) {
+    throw new Error('Email not configured');
+  }
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    throw new Error('No tasks');
+  }
+  const rows = tasks
+    .map(
+      (t) =>
+        `<tr><td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(t.title || '(untitled)')}</td><td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(t.due || '—')}</td><td style="padding:8px;border-bottom:1px solid #eee;">${t.overdue ? 'Yes' : 'No'}</td></tr>`
+    )
+    .join('');
+  const html = `
+    <div style="font-family:Segoe UI,Roboto,sans-serif;max-width:640px;">
+      <p style="margin:0 0 12px;">Hello ${escapeHtml(userName || '')},</p>
+      <p style="margin:0 0 12px;">Here is your Task View summary:</p>
+      <table style="width:100%;border-collapse:collapse;font-size:14px;">
+        <thead><tr style="background:#f5f5f5;"><th style="text-align:left;padding:8px;">Task</th><th style="text-align:left;padding:8px;">Due</th><th style="text-align:left;padding:8px;">Overdue</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>${emailBrandFooterHtml()}`;
+  await sendMail(
+    toEmail,
+    `Task View summary (${tasks.length} task${tasks.length === 1 ? '' : 's'})`,
+    html
+  );
+}
+
 module.exports = {
   isEmailEnabled,
   sendTaskReminderEmail,
@@ -385,4 +420,5 @@ module.exports = {
   sendTaskRejectedEmail,
   sendAccountCreatedEmail,
   sendPasswordResetCodeEmail,
+  sendTaskViewSummaryEmail,
 };
