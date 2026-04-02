@@ -170,6 +170,7 @@ async function main() {
         return cb(null, false);
       },
       credentials: true,
+      allowedHeaders: ['Content-Type', 'Authorization'],
     })
   );
 

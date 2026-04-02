@@ -1,16 +1,50 @@
-const APP_VERSION = '16.0.0';
+const APP_VERSION = '16.0.1';
 
 let __loginErrorDismissTimer = null;
 
 /** Plaintext passwords for User rows not yet confirmed by a successful workspace sync (never in localStorage). */
 const __pendingPasswordsByUserId = new Map();
 
-/** Legacy key: cleared on logout so old installs drop any copy. Auth uses httpOnly cookie + credentials: 'include' only. */
+/** Session JWT mirror for cross-origin API calls when third-party cookies are blocked (e.g. Incognito). HttpOnly cookie still set by server when accepted. */
 const API_AUTH_TOKEN_KEY = 'tasktrack_api_auth_token';
 
 function clearApiAuthToken() {
-    sessionStorage.removeItem(API_AUTH_TOKEN_KEY);
-    localStorage.removeItem(API_AUTH_TOKEN_KEY);
+    try {
+        sessionStorage.removeItem(API_AUTH_TOKEN_KEY);
+        localStorage.removeItem(API_AUTH_TOKEN_KEY);
+    } catch {
+        /* ignore */
+    }
+}
+
+/** Prefer sessionStorage; one-time migrate from legacy localStorage then remove. */
+function getStoredApiAuthToken() {
+    try {
+        let t = sessionStorage.getItem(API_AUTH_TOKEN_KEY);
+        if (!t) {
+            t = localStorage.getItem(API_AUTH_TOKEN_KEY);
+            if (t) {
+                sessionStorage.setItem(API_AUTH_TOKEN_KEY, t);
+                localStorage.removeItem(API_AUTH_TOKEN_KEY);
+            }
+        }
+        return t && String(t).trim() ? String(t).trim() : '';
+    } catch {
+        return '';
+    }
+}
+
+function persistApiAuthToken(token) {
+    try {
+        const s = typeof token === 'string' ? token.trim() : '';
+        if (s) {
+            sessionStorage.setItem(API_AUTH_TOKEN_KEY, s);
+        } else {
+            sessionStorage.removeItem(API_AUTH_TOKEN_KEY);
+        }
+    } catch {
+        /* ignore */
+    }
 }
 
 const LAST_LOGIN_EMAIL_KEY = 'tasktrack_last_login_email';
@@ -222,6 +256,12 @@ async function apiFetch(path, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json';
+    }
+    if (!options.skipAuthHeader) {
+        const tok = getStoredApiAuthToken();
+        if (tok && !headers.Authorization) {
+            headers.Authorization = `Bearer ${tok}`;
+        }
     }
     const res = await fetch(url, { ...options, credentials: 'include', headers });
     if (options.skipSessionSweep) {
@@ -1319,6 +1359,7 @@ async function login() {
         currentUser = body.user;
         if (body.smtpConfigured != null) currentUser.smtpConfigured = body.smtpConfigured;
         if (body.sessionIdleTimeoutMinutes != null) currentUser.sessionIdleTimeoutMinutes = body.sessionIdleTimeoutMinutes;
+        if (body.token) persistApiAuthToken(body.token);
         sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
         rememberLastLoginEmail(email);
         try {
@@ -1464,6 +1505,7 @@ async function register() {
         currentUser = body.user;
         if (body.smtpConfigured != null) currentUser.smtpConfigured = body.smtpConfigured;
         if (body.sessionIdleTimeoutMinutes != null) currentUser.sessionIdleTimeoutMinutes = body.sessionIdleTimeoutMinutes;
+        if (body.token) persistApiAuthToken(body.token);
         sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
         rememberLastLoginEmail(email);
         try {
@@ -11499,8 +11541,13 @@ async function bootstrapApp() {
             try {
                 await apiPullWorkspace();
             } catch (pullErr) {
-                console.error('Workspace load on bootstrap:', pullErr);
-                __workspaceCache = normalizeData(defaultWorkspaceShell());
+                console.warn('Workspace load on bootstrap, retrying once…', pullErr);
+                try {
+                    await apiPullWorkspace();
+                } catch (pullErr2) {
+                    console.error('Workspace load on bootstrap:', pullErr2);
+                    __workspaceCache = normalizeData(defaultWorkspaceShell());
+                }
             }
         } else {
             currentUser = null;
