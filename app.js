@@ -1,4 +1,4 @@
-const APP_VERSION = '17.0.0';
+const APP_VERSION = '17.1.0';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -31,6 +31,51 @@ function reportToLabelForId(id) {
     const opts = Array.isArray(getData().reportToOptions) ? getData().reportToOptions : [];
     const o = opts.find(x => String(x.id) === String(id));
     return o ? o.label : '';
+}
+
+/** Same line format as master Settings (labels; optional |disabled). */
+function parseReportToOptionsFromLines(raw) {
+    const out = [];
+    String(raw || '')
+        .split('\n')
+        .forEach((line, i) => {
+            const t = line.trim();
+            if (!t) return;
+            const disabled = /\|\s*disabled\s*$/i.test(t);
+            const label = t.replace(/\|\s*disabled\s*$/i, '').trim();
+            if (!label) return;
+            const slug = label
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_|_$/g, '')
+                .slice(0, 64);
+            const id = slug || `rt_${i}`;
+            out.push({ id, label, disabled });
+        });
+    return out;
+}
+
+async function saveTenantReportToOptions() {
+    if (!currentUser || currentUser.role !== 'admin' || currentUser.isMaster) return;
+    const ta = document.getElementById('tenantReportToOptionsRaw');
+    if (!ta) return;
+    const parsed = parseReportToOptionsFromLines(ta.value);
+    updateData(d => {
+        d.tenantReportToOptions = parsed;
+        d.reportToOptions = parsed;
+    });
+    if (isApiMode()) {
+        await flushWorkspaceToApiNow();
+        try {
+            await apiPullWorkspace();
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    alert('Report to options saved.');
+    renderSettings();
+    renderTasks();
+    renderInteractiveDashboard();
 }
 
 let __loginErrorDismissTimer = null;
@@ -126,6 +171,16 @@ function buildWorkspacePayloadForPut() {
     if (Array.isArray(payload.tasks)) {
         payload.tasks = payload.tasks.filter(t => !t._sharedTask);
     }
+    // Tenant admins persist Report-to under ws.data.reportToOptions; team users keep merged list in payload
+    if (
+        currentUser &&
+        currentUser.role === 'admin' &&
+        !currentUser.isMaster &&
+        Array.isArray(payload.tenantReportToOptions)
+    ) {
+        payload.reportToOptions = payload.tenantReportToOptions;
+    }
+    delete payload.tenantReportToOptions;
     return payload;
 }
 
@@ -434,7 +489,8 @@ function defaultWorkspaceShell() {
         locationItems: [],
         codeSnippets: [],
         journal: {},
-        reportToOptions: []
+        reportToOptions: [],
+        tenantReportToOptions: []
     };
 }
 
@@ -990,6 +1046,15 @@ function init() {
     renderInteractiveDashboard();
     updateLoginScreenCopy();
     wireGlobalSearch();
+
+    if (sessionStorage.getItem('focusOverviewAfterLogin') === '1') {
+        sessionStorage.removeItem('focusOverviewAfterLogin');
+        try {
+            switchTab('dashboard', null);
+        } catch (e) {
+            console.error(e);
+        }
+    }
 }
 
 // Data Management
@@ -1067,7 +1132,8 @@ function loadData() {
             dailyPlanner: [],
             codeSnippets: [],
             journal: {},
-            reportToOptions: []
+            reportToOptions: [],
+            tenantReportToOptions: []
         };
         saveData(defaultData);
         return defaultData;
@@ -1090,7 +1156,8 @@ function normalizeData(data) {
             dailyPlanner: [],
             codeSnippets: [],
             journal: {},
-            reportToOptions: []
+            reportToOptions: [],
+            tenantReportToOptions: []
         };
     }
 
@@ -1116,7 +1183,8 @@ function normalizeData(data) {
         locationItems: Array.isArray(data.locationItems) ? data.locationItems : [],
         codeSnippets: Array.isArray(data.codeSnippets) ? data.codeSnippets : [],
         journal: data.journal && typeof data.journal === 'object' ? data.journal : {},
-        reportToOptions: Array.isArray(data.reportToOptions) ? data.reportToOptions : []
+        reportToOptions: Array.isArray(data.reportToOptions) ? data.reportToOptions : [],
+        tenantReportToOptions: Array.isArray(data.tenantReportToOptions) ? data.tenantReportToOptions : []
     };
 }
 
@@ -1602,6 +1670,7 @@ async function login() {
                     const lp = document.getElementById('loginPassword');
                     if (lp) lp.value = '';
                     clearLoginFormError();
+                    sessionStorage.setItem('focusOverviewAfterLogin', '1');
                     checkAuth();
                     try {
                         init();
@@ -1631,6 +1700,7 @@ async function login() {
         const lp = document.getElementById('loginPassword');
         if (lp) lp.value = '';
         clearLoginFormError();
+        sessionStorage.setItem('focusOverviewAfterLogin', '1');
         checkAuth();
         try {
             init();
@@ -1660,6 +1730,7 @@ async function login() {
     sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
     const lp = document.getElementById('loginPassword');
     if (lp) lp.value = '';
+    sessionStorage.setItem('focusOverviewAfterLogin', '1');
     checkAuth();
     init();
 }
@@ -1913,6 +1984,10 @@ async function logout() {
     __workspaceRemoteUpdatedAt = null;
     clearApiAuthToken();
     sessionStorage.removeItem('currentUser');
+    sessionStorage.removeItem('interactiveDashboardFiltersInit');
+    sessionStorage.removeItem('taskSetupDefaultsApplied');
+    sessionStorage.removeItem('taskSetupHighlightFirst');
+    sessionStorage.removeItem('focusOverviewAfterLogin');
     currentUser = null;
     document.body.classList.remove('user-admin');
     checkAuth();
@@ -2026,7 +2101,15 @@ function switchTab(tabName, eventElement, skipAutoRender = false) {
         if (tabName === 'dashboard') renderDashboard();
         if (tabName === 'interactive') renderInteractiveDashboard();
         if (tabName === 'drilldown') renderDrilldown();
-        if (tabName === 'tasks') renderTasks();
+        if (tabName === 'tasks') {
+            if (sessionStorage.getItem('taskSetupDefaultsApplied') !== '1') {
+                const ft = document.getElementById('filterType');
+                if (ft) ft.value = 'recurring';
+                sessionStorage.setItem('taskSetupDefaultsApplied', '1');
+                sessionStorage.setItem('taskSetupHighlightFirst', '1');
+            }
+            renderTasks();
+        }
         if (tabName === 'calendar') renderCalendar();
         if (tabName === 'milestones') renderMilestones();
         if (tabName === 'planner') renderDailyPlanner();
@@ -2042,12 +2125,217 @@ function switchTab(tabName, eventElement, skipAutoRender = false) {
     }
 }
 
+function taskVisibleForIntelligence(task) {
+    if (!task || task.removed_at || !currentUser) return false;
+    return (
+        task.assigned_to === currentUser.id ||
+        (task.is_team_task && currentUser.role === 'admin') ||
+        currentUser.role === 'admin'
+    );
+}
+
 function renderIntelligenceTab() {
-    /* Static KPI layout in index.html; hook for future metrics. */
+    const root = document.getElementById('intelligenceRoot');
+    if (!root || !currentUser) return;
+    const data = getData();
+    const tasks = (data.tasks || []).filter(taskVisibleForIntelligence);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const thirtyAgo = new Date(today);
+    thirtyAgo.setDate(thirtyAgo.getDate() - 30);
+    let stuckDays = parseInt(
+        (document.getElementById('intelligenceStuckDays') && document.getElementById('intelligenceStuckDays').value) ||
+            '7',
+        10
+    );
+    if (Number.isNaN(stuckDays) || stuckDays < 1) stuckDays = 7;
+
+    let completed30 = 0;
+    let overdue = 0;
+    let stuck = 0;
+    let totalOpen = 0;
+    const delayByUser = {};
+    for (const t of tasks) {
+        if (isTaskCompleted(t)) {
+            if (t.completed_at && new Date(t.completed_at) >= thirtyAgo) completed30++;
+            continue;
+        }
+        totalOpen++;
+        const due = t.due_date || t.next_due_date;
+        if (due) {
+            const parts = due.split('-');
+            const td = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+            td.setHours(0, 0, 0, 0);
+            if (td < today) {
+                overdue++;
+                const diff = Math.floor((today - td) / (86400000));
+                const u = data.users.find(uu => uu.id === t.assigned_to);
+                const name = u ? u.name : '?';
+                delayByUser[name] = (delayByUser[name] || 0) + diff;
+            }
+            const threshold = new Date(today);
+            threshold.setDate(threshold.getDate() - stuckDays);
+            if (td < threshold) stuck++;
+        }
+    }
+    const denom = tasks.filter(t => !t.removed_at).length;
+    const completionRatio = denom > 0 ? Math.round((tasks.filter(isTaskCompleted).length / denom) * 100) : 0;
+
+    const delayRows = Object.entries(delayByUser)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(
+            ([name, days]) =>
+                `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee;font-size:14px;"><span>${escapeHtml(name)}</span><span style="color:#c62828;font-weight:600;">${days}d delay</span></div>`
+        )
+        .join('');
+
+    const barW = Math.min(100, completionRatio);
+    root.innerHTML = `
+        <div style="max-width:1100px;margin:0 auto;">
+            <h2 style="margin-bottom:8px;">Intelligence Layer</h2>
+            <p style="color:#666;font-size:14px;margin-bottom:20px;">Live signals from your workspace. All times use <strong>IST (UTC+05:30)</strong>.</p>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:20px;">
+                <div class="card" style="margin:0;background:linear-gradient(145deg,#1a237e 0%,#3949ab 100%);color:#fff;border:none;">
+                    <div style="font-size:12px;opacity:0.9;text-transform:uppercase;letter-spacing:0.06em;">Completion ratio</div>
+                    <div style="font-size:36px;font-weight:700;margin:8px 0;">${completionRatio}%</div>
+                    <div style="height:6px;background:rgba(255,255,255,0.25);border-radius:3px;overflow:hidden;">
+                        <div style="height:100%;width:${barW}%;background:#ffab40;transition:width 0.4s ease;"></div>
+                    </div>
+                    <div style="font-size:12px;margin-top:8px;opacity:0.85;">Share of visible tasks marked done</div>
+                </div>
+                <div class="card" style="margin:0;">
+                    <div style="font-size:12px;color:#666;text-transform:uppercase;">Completed (30d)</div>
+                    <div style="font-size:32px;font-weight:700;color:#2e7d32;">${completed30}</div>
+                    <div style="font-size:13px;color:#888;">Tasks completed in the last 30 days (IST calendar)</div>
+                </div>
+                <div class="card" style="margin:0;">
+                    <div style="font-size:12px;color:#666;text-transform:uppercase;">Overdue (open)</div>
+                    <div style="font-size:32px;font-weight:700;color:#c62828;">${overdue}</div>
+                    <div style="font-size:13px;color:#888;">Open tasks past due date</div>
+                </div>
+                <div class="card" style="margin:0;">
+                    <div style="font-size:12px;color:#666;text-transform:uppercase;">Open pipeline</div>
+                    <div style="font-size:32px;font-weight:700;color:#1565c0;">${totalOpen}</div>
+                    <div style="font-size:13px;color:#888;">Not completed / not removed</div>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:16px;">
+                <h3 style="margin-top:0;">Bottleneck analysis</h3>
+                <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:14px;">
+                    Flag open tasks overdue by more than
+                    <input type="number" id="intelligenceStuckDays" min="1" max="365" value="${stuckDays}" class="form-control" style="width:72px;display:inline-block;" onchange="renderIntelligenceTab()">
+                    days (rolling)
+                </label>
+                <div style="font-size:28px;font-weight:700;color:#ef6c00;margin-bottom:8px;">${stuck}</div>
+                <p style="color:#666;font-size:13px;margin:0 0 16px;">Stuck tasks by this threshold (by due / next due date).</p>
+                <h4 style="margin:12px 0 8px;font-size:15px;">Delay load by assignee</h4>
+                ${delayRows || '<p style="color:#999;font-size:14px;">No overdue delay sums in view.</p>'}
+            </div>
+            <div class="card">
+                <h3 style="margin-top:0;">Variance &amp; trends (snapshot)</h3>
+                <p style="color:#555;font-size:14px;line-height:1.6;margin-bottom:12px;">
+                    Compare <strong>planned</strong> (due / next due) vs <strong>actual</strong> completion timestamps for forecasting. Below is a quick read on open workload concentration.
+                </p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+                    ${['high', 'medium', 'low'].map(p => {
+        const c = tasks.filter(t => !isTaskCompleted(t) && t.priority === p).length;
+        const h = Math.min(120, 20 + c * 8);
+        return `<div style="text-align:center;"><div style="width:48px;height:${h}px;background:linear-gradient(180deg,#7e57c2,#5e35b1);border-radius:6px 6px 2px 2px;margin:0 auto;"></div><div style="font-size:11px;color:#666;margin-top:6px;">${p}</div><div style="font-size:18px;font-weight:600;">${c}</div></div>`;
+    }).join('')}
+                </div>
+                <p style="font-size:12px;color:#999;margin-top:16px;margin-bottom:0;">Stack height scales with open task count by priority (illustrative).</p>
+            </div>
+        </div>`;
+}
+
+const TEMPLATE_LIBRARY = [
+    {
+        id: 'month_end',
+        title: 'Month-end closing checklist',
+        blurb: 'Structured close sequence for finance ops with review gates.',
+        items: [
+            'Bank & cash reconciliations',
+            'Accruals / prepayments review',
+            'Intercompany balances',
+            'Fixed assets roll-forward',
+            'Tax / statutory provision review',
+            'Management review sign-off',
+        ],
+    },
+    {
+        id: 'audit',
+        title: 'Audit preparation',
+        blurb: 'Evidence pack and timeline alignment before fieldwork.',
+        items: [
+            'PBC list ownership assigned',
+            'Trial balance tie-out',
+            'Sampling support files',
+            'Open items / misstatement tracker',
+            'Kickoff & timeline confirmation',
+        ],
+    },
+    {
+        id: 'budget',
+        title: 'Budget cycle',
+        blurb: 'Cross-functional planning rhythm with baselines and approvals.',
+        items: [
+            'Baseline actuals locked',
+            'Departmental assumptions',
+            'Consolidation & scenarios',
+            'Leadership review cycle',
+            'Board / approval milestone',
+        ],
+    },
+];
+
+function toggleTemplateCard(id) {
+    const body = document.getElementById(`templateBody_${id}`);
+    const icon = document.getElementById(`templateChev_${id}`);
+    if (!body) return;
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    if (icon) icon.textContent = open ? '▸' : '▾';
+}
+
+function copyTemplateChecklist(id) {
+    const t = TEMPLATE_LIBRARY.find(x => x.id === id);
+    if (!t) return;
+    const text = `${t.title}\n${t.items.map((x, i) => `${i + 1}. ${x}`).join('\n')}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => alert('Checklist copied to clipboard.')).catch(() => alert(text));
+    } else {
+        alert(text);
+    }
 }
 
 function renderTemplateTab() {
-    /* Static templates in index.html. */
+    const root = document.getElementById('templatesRoot');
+    if (!root) return;
+    root.innerHTML = `
+        <div style="max-width:900px;margin:0 auto;">
+            <h2 style="margin-bottom:8px;">Template Library</h2>
+            <p style="color:#666;margin-bottom:20px;">Starter workflows — expand a card, copy the checklist, or jump to Task Setup to create work items. All dates/times in the app follow <strong>IST (UTC+05:30)</strong>.</p>
+            <div style="display:flex;flex-direction:column;gap:12px;">
+                ${TEMPLATE_LIBRARY.map(
+                    (t, idx) => `
+                <div class="card" style="margin:0;overflow:hidden;border-left:4px solid ${idx === 0 ? '#3949ab' : idx === 1 ? '#00897b' : '#f57c00'};">
+                    <button type="button" onclick="toggleTemplateCard('${t.id}')" style="width:100%;text-align:left;background:transparent;border:none;padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;">
+                        <span id="templateChev_${t.id}" style="font-size:18px;color:#667eea;">▸</span>
+                        <span style="font-size:18px;font-weight:600;color:#333;">${escapeHtml(t.title)}</span>
+                    </button>
+                    <div id="templateBody_${t.id}" style="display:none;padding:0 16px 16px 44px;">
+                        <p style="color:#666;font-size:14px;margin:0 0 12px;">${escapeHtml(t.blurb)}</p>
+                        <ul style="line-height:1.85;margin:0 0 14px;padding-left:20px;color:#444;">
+                            ${t.items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}
+                        </ul>
+                        <button type="button" class="btn btn-secondary" onclick="copyTemplateChecklist('${t.id}')" style="margin-right:8px;">Copy checklist</button>
+                        <button type="button" class="btn btn-primary" onclick="switchTab('tasks', null)">Open Task Setup</button>
+                    </div>
+                </div>`
+                ).join('')}
+            </div>
+        </div>`;
 }
 
 // Dashboard
@@ -3537,6 +3825,33 @@ function filterTasks() {
         : '<p style="text-align: center; color: #999; padding: 20px;">No tasks found</p>';
 
     document.getElementById('tasksList').innerHTML = tasksHtml;
+
+    if (sessionStorage.getItem('taskSetupHighlightFirst') === '1') {
+        sessionStorage.removeItem('taskSetupHighlightFirst');
+        if (filteredTasks.length > 0) {
+            let oldest = filteredTasks[0];
+            let bestKey = oldest.created_at
+                ? new Date(oldest.created_at).getTime()
+                : Number(oldest.id) || Infinity;
+            for (const t of filteredTasks) {
+                const k = t.created_at ? new Date(t.created_at).getTime() : Number(t.id) || Infinity;
+                if (k < bestKey) {
+                    bestKey = k;
+                    oldest = t;
+                }
+            }
+            requestAnimationFrame(() => {
+                const el = document.querySelector(`#tasksList [data-task-id="${oldest.id}"]`);
+                if (el) {
+                    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                    el.style.outline = '3px solid rgba(102, 126, 234, 0.55)';
+                    setTimeout(() => {
+                        el.style.outline = '';
+                    }, 2500);
+                }
+            });
+        }
+    }
 }
 
 function filterTasksByDate(dateStr) {
@@ -6820,6 +7135,23 @@ function renderSettings() {
         }
     }
 
+    const tenantRtCard = document.getElementById('tenantReportToCard');
+    const tenantRtTa = document.getElementById('tenantReportToOptionsRaw');
+    if (tenantRtCard && tenantRtTa) {
+        if (currentUser.role === 'admin' && !currentUser.isMaster) {
+            tenantRtCard.style.display = 'block';
+            const tenant = Array.isArray(data.tenantReportToOptions) ? data.tenantReportToOptions : [];
+            const linesSrc =
+                tenant.length > 0 ? tenant : Array.isArray(data.reportToOptions) ? data.reportToOptions : [];
+            tenantRtTa.value = linesSrc
+                .map(o => (o && o.disabled ? `${o.label}|disabled` : o && o.label))
+                .filter(Boolean)
+                .join('\n');
+        } else {
+            tenantRtCard.style.display = 'none';
+        }
+    }
+
     // Locations
     const locationsHtml = data.locations.map(loc => `
         <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #f9f9f9; border-radius: 5px; margin-bottom: 10px;">
@@ -7763,33 +8095,27 @@ function renderInteractiveDashboard() {
     const currentStatusValue = statusSelect ? statusSelect.value : '';
     const currentReportToValue = reportToSelect ? reportToSelect.value : '';
 
-    // Check if this is the first time loading (no options exist yet or only "All Users" option)
-    const isFirstLoad = !userSelect || userSelect.options.length <= 1;
+    const filtersEverInit = sessionStorage.getItem('interactiveDashboardFiltersInit') === '1';
 
     // Populate user dropdown
     userSelect.innerHTML = '<option value="">All Users</option>' +
         usersVisibleInPickers().map(u =>
-            `<option value="${u.id}">${escapeHtml(u.name)}</option>`
+            `<option value="${String(u.id)}">${escapeHtml(u.name)}</option>`
         ).join('');
 
-    // Set default user to logged-in user only on first load, otherwise preserve user selection
-    if (isFirstLoad) {
-        // First load - set default to logged-in user
-        userSelect.value = currentUser.id;
-    } else {
-        // Not first load - preserve whatever the user selected (including "All Users" = '')
-        userSelect.value = currentUserValue;
-    }
-
-    // Set default status to "Pending" only on first load, otherwise preserve user selection
-    if (statusSelect) {
-        if (isFirstLoad) {
-            // First load - set default to "Pending"
-            statusSelect.value = 'pending';
+    // Default once per browser session: logged-in user + Pending
+    if (!filtersEverInit) {
+        const uid = String(currentUser.id);
+        if ([...userSelect.options].some(o => o.value === uid)) {
+            userSelect.value = uid;
         } else {
-            // Not first load - preserve whatever the user selected (including "All Status" = '')
-            statusSelect.value = currentStatusValue;
+            userSelect.value = '';
         }
+        if (statusSelect) statusSelect.value = 'pending';
+        sessionStorage.setItem('interactiveDashboardFiltersInit', '1');
+    } else {
+        userSelect.value = currentUserValue;
+        if (statusSelect) statusSelect.value = currentStatusValue;
     }
 
     locationSelect.innerHTML = '<option value="">All Locations</option>' +

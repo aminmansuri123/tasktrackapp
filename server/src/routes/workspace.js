@@ -29,11 +29,11 @@ const {
   parseWorkspaceRestoreBody,
   emailTaskViewSummarySchema,
 } = require('../validation/schemas');
-const { getSiteSettings } = require('../services/registrationPolicy');
+const { getSiteSettings, sanitizeReportToOptions } = require('../services/registrationPolicy');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '17.0.0';
+const EXPORT_VERSION = '17.1.0';
 
 function isLegacyFlatJournal(j) {
   if (!j || typeof j !== 'object' || Array.isArray(j)) return false;
@@ -441,7 +441,12 @@ router.get('/', authMiddleware, async (req, res) => {
     }
     try {
       const site = await getSiteSettings();
-      out.reportToOptions = Array.isArray(site.reportToOptions) ? site.reportToOptions : [];
+      const siteRt = Array.isArray(site.reportToOptions) ? site.reportToOptions : [];
+      const tenantSan = sanitizeReportToOptions({ reportToOptions: normalized.reportToOptions });
+      if (isAdmin) {
+        out.tenantReportToOptions = tenantSan;
+      }
+      out.reportToOptions = tenantSan.length > 0 ? tenantSan : siteRt;
     } catch (_) {
       out.reportToOptions = [];
     }
@@ -492,6 +497,12 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
       req.user.userId,
       tenantRoot
     );
+
+    if (isAdmin) {
+      merged.reportToOptions = sanitizeReportToOptions({ reportToOptions: incoming.reportToOptions });
+    } else {
+      merged.reportToOptions = existingNormalized.reportToOptions;
+    }
 
     if (!isAdmin) {
       merged.users = await loadTenantUsers(tenantRoot, req.user.userId);
@@ -569,7 +580,12 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
     }
     try {
       const site = await getSiteSettings();
-      payload.reportToOptions = Array.isArray(site.reportToOptions) ? site.reportToOptions : [];
+      const siteRt = Array.isArray(site.reportToOptions) ? site.reportToOptions : [];
+      const tenantSan = sanitizeReportToOptions({ reportToOptions: merged.reportToOptions });
+      if (isAdmin) {
+        payload.tenantReportToOptions = tenantSan;
+      }
+      payload.reportToOptions = tenantSan.length > 0 ? tenantSan : siteRt;
     } catch (_) {
       payload.reportToOptions = [];
     }

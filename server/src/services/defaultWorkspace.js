@@ -19,6 +19,7 @@ function defaultWorkspaceData() {
     locationItems: [],
     codeSnippets: [],
     journal: {},
+    reportToOptions: [],
   };
 }
 
@@ -39,6 +40,7 @@ function normalizeWorkspacePayload(data) {
     locationItems: Array.isArray(data.locationItems) ? data.locationItems : [],
     codeSnippets: Array.isArray(data.codeSnippets) ? data.codeSnippets : [],
     journal: data.journal && typeof data.journal === 'object' ? data.journal : {},
+    reportToOptions: Array.isArray(data.reportToOptions) ? data.reportToOptions : [],
   };
 }
 

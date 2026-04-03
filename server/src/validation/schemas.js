@@ -15,6 +15,7 @@ const workspacePutSchema = z
     locationItems: z.array(z.unknown()).max(300000).optional(),
     codeSnippets: z.array(z.unknown()).max(20000).optional(),
     journal: z.record(z.string(), z.unknown()).optional(),
+    reportToOptions: z.array(z.unknown()).max(200).optional(),
   });
 
 const loginBodySchema = z.object({

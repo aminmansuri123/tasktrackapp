@@ -2118,44 +2118,26 @@
             </div>
 
             <div id="intelligence" class="tab-content">
-                <h2>Intelligence Layer (Finance-focused)</h2>
-                <p style="color:#666;max-width:900px;">Use operational KPIs and trends to steer work—not just store it. All times use <strong>IST (UTC+05:30)</strong> in this app.</p>
-                <div class="card" style="margin:16px 0;">
-                    <h3>KPI Dashboard</h3>
-                    <ul style="line-height:1.7;color:#444;">
-                        <li>Close cycle days</li>
-                        <li>AP ageing processing time</li>
-                        <li>AR follow-up efficiency</li>
-                        <li>Task completion ratio</li>
-                    </ul>
-                </div>
-                <div class="card" style="margin:16px 0;">
-                    <h3>Bottleneck Analysis</h3>
-                    <p style="color:#555;">Identify tasks stuck &gt; X days; users with highest delays.</p>
-                </div>
-                <div class="card" style="margin:16px 0;">
-                    <h3>Variance Tracking</h3>
-                    <p style="color:#555;">Planned vs actual completion timelines for forecasting.</p>
-                </div>
-                <div class="card" style="margin:16px 0;">
-                    <h3>Trend Analysis</h3>
-                    <p style="color:#555;">Monthly task volume, delay trends, team productivity trends.</p>
-                </div>
+                <div id="intelligenceRoot"></div>
             </div>
 
             <div id="templates" class="tab-content">
-                <h2>Template Library</h2>
-                <p style="color:#666;">Predefined workflows you can adopt or adapt.</p>
-                <ul style="line-height:2;font-size:16px;">
-                    <li><strong>Month-end closing checklist</strong></li>
-                    <li><strong>Audit preparation</strong></li>
-                    <li><strong>Budget cycle</strong></li>
-                </ul>
+                <div id="templatesRoot"></div>
             </div>
 
             <!-- Settings Tab (Admin Only) -->
             <div id="settings" class="tab-content">
                 <h2>Settings</h2>
+
+                <div id="tenantReportToCard" class="card" style="margin-bottom: 20px; display: none;">
+                    <h3>Report to (task dropdown options)</h3>
+                    <p style="color:#666;font-size:13px;line-height:1.55;margin-bottom:10px;">
+                        One label per line. Append <code>|disabled</code> to hide an option from the dropdown without deleting it.
+                        If you leave this empty, <strong>master defaults</strong> apply when the hosted app provides them.
+                    </p>
+                    <textarea id="tenantReportToOptionsRaw" class="form-control" rows="6" placeholder="CFO&#10;Finance Controller&#10;Team Lead|disabled"></textarea>
+                    <button type="button" class="btn btn-primary" style="margin-top:10px;" onclick="saveTenantReportToOptions()">Save Report to options</button>
+                </div>
 
                 <!-- User Management Section -->
                 <div class="card" style="margin-bottom: 20px;">
