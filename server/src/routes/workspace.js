@@ -30,10 +30,11 @@ const {
   emailTaskViewSummarySchema,
 } = require('../validation/schemas');
 const { getSiteSettings, sanitizeReportToOptions } = require('../services/registrationPolicy');
+const { formatLastLoginAtDisplay } = require('../lib/lastLoginFormat');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '17.2.3';
+const EXPORT_VERSION = '17.2.4';
 
 function isLegacyFlatJournal(j) {
   if (!j || typeof j !== 'object' || Array.isArray(j)) return false;
@@ -206,9 +207,7 @@ async function loadTenantUsers(tenantRoot, currentUserId) {
           is_active: doc.isActive,
           isMaster: doc.isMaster,
           enabledFeatures: Array.isArray(doc.enabledFeatures) ? doc.enabledFeatures : [],
-          last_login_at: doc.lastLoginAt
-            ? new Date(doc.lastLoginAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
-            : '',
+          last_login_at: doc.lastLoginAt ? formatLastLoginAtDisplay(doc.lastLoginAt) : '',
         });
       }
     } catch (e) {

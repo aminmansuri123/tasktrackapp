@@ -1,15 +1,7 @@
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { MASTER_EMAIL } = require('../config');
-
-function formatLastLoginAt(d) {
-  if (!d) return '';
-  try {
-    return new Date(d).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-  } catch {
-    return '';
-  }
-}
+const { formatLastLoginAtDisplay } = require('../lib/lastLoginFormat');
 
 function stripPasswordFromUsers(users) {
   if (!Array.isArray(users)) return [];
@@ -48,7 +40,7 @@ async function usersToClientShapeForTenant(tenantRootUserId) {
     isMaster: u.isMaster,
     enabledFeatures: Array.isArray(u.enabledFeatures) ? u.enabledFeatures : [],
     isShared: Array.isArray(u.sharedWithTenants) && u.sharedWithTenants.includes(root) && u.tenantRootUserId !== root,
-    last_login_at: formatLastLoginAt(u.lastLoginAt),
+    last_login_at: formatLastLoginAtDisplay(u.lastLoginAt),
   }));
 }
 
@@ -86,7 +78,7 @@ async function usersToClientShapeAll() {
       tenant_admin_label: tenantAdminLabel,
       enabledFeatures: Array.isArray(u.enabledFeatures) ? u.enabledFeatures : [],
       sharedWithTenants: Array.isArray(u.sharedWithTenants) ? u.sharedWithTenants : [],
-      last_login_at: formatLastLoginAt(u.lastLoginAt),
+      last_login_at: formatLastLoginAtDisplay(u.lastLoginAt),
     };
   });
 }

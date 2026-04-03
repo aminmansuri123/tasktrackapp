@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.3';
+const APP_VERSION = '17.2.4';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
