@@ -55,6 +55,16 @@ async function assertRegistrationAllowed(email) {
   return 'APPROVAL_REQUIRED';
 }
 
+function sanitizeBlockedLists(body) {
+  const rawE = body?.blockedEmails;
+  const arrE = Array.isArray(rawE) ? rawE : typeof rawE === 'string' ? rawE.split(/[\n,;]+/) : [];
+  const blockedEmails = [...new Set(arrE.map(normalizeEmailEntry).filter(Boolean))];
+  const rawD = body?.blockedDomains;
+  const arrD = Array.isArray(rawD) ? rawD : typeof rawD === 'string' ? rawD.split(/[\n,;]+/) : [];
+  const blockedDomains = [...new Set(arrD.map(normalizeDomainEntry).filter(Boolean))];
+  return { blockedEmails, blockedDomains };
+}
+
 function sanitizePolicyBody(body) {
   const registrationMode = body?.registrationMode;
   if (!['open', 'restricted'].includes(registrationMode)) {
@@ -73,9 +83,30 @@ function sanitizePolicyBody(body) {
   return { registrationMode, allowedEmails, allowedDomains };
 }
 
+/**
+ * @returns {Promise<string|null>} null if allowed, 'BLOCKED' if email/domain is blocklisted
+ */
+async function assertEmailNotBlocked(email) {
+  const s = await getSiteSettings();
+  const em = normalizeEmailEntry(email);
+  if (!em || !em.includes('@')) return null;
+  const blockedEmails = new Set((s.blockedEmails || []).map(normalizeEmailEntry).filter(Boolean));
+  if (blockedEmails.has(em)) return 'BLOCKED';
+  const dom = em.slice(em.indexOf('@') + 1);
+  const blockedDomains = (s.blockedDomains || []).map(normalizeDomainEntry).filter(Boolean);
+  for (const d of blockedDomains) {
+    if (!d) continue;
+    if (dom === d) return 'BLOCKED';
+    if (dom.endsWith(`.${d}`)) return 'BLOCKED';
+  }
+  return null;
+}
+
 module.exports = {
   getSiteSettings,
   assertRegistrationAllowed,
+  assertEmailNotBlocked,
+  sanitizeBlockedLists,
   sanitizePolicyBody,
   normalizeEmailEntry,
   normalizeDomainEntry,

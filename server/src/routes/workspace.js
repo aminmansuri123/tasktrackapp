@@ -32,7 +32,20 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '16.0.0';
+const EXPORT_VERSION = '16.1.0';
+
+/** Non-admin tenant users: hide admin-managed content; tasks/users/locations still needed. */
+function maskWorkspaceForTenantUser(normalized) {
+  return {
+    ...normalized,
+    milestones: [],
+    notes: [],
+    learningNotes: [],
+    journal: {},
+    dailyPlanner: [],
+    codeSnippets: [],
+  };
+}
 
 const emailTaskViewLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -315,7 +328,10 @@ router.get('/', authMiddleware, async (req, res) => {
       console.error('GET /workspace: could not persist into ws.data:', saveErr.message);
     }
 
-    const out = { ...normalized };
+    let out = { ...normalized };
+    if (req.user.role !== 'admin') {
+      out = maskWorkspaceForTenantUser(out);
+    }
     if (ws.updatedAt) {
       out._workspaceUpdatedAt = ws.updatedAt.toISOString();
     }
@@ -358,6 +374,12 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
       merged.locations = existingNormalized.locations;
       merged.segregationTypes = existingNormalized.segregationTypes;
       merged.holidays = existingNormalized.holidays;
+      merged.milestones = existingNormalized.milestones;
+      merged.notes = existingNormalized.notes;
+      merged.learningNotes = existingNormalized.learningNotes;
+      merged.journal = existingNormalized.journal;
+      merged.dailyPlanner = existingNormalized.dailyPlanner;
+      merged.codeSnippets = existingNormalized.codeSnippets;
     } else {
       try {
         const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
@@ -399,7 +421,11 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
       merged._workspaceUpdatedAt = ws.updatedAt.toISOString();
     }
 
-    return res.json(merged);
+    let payload = { ...merged };
+    if (!isAdmin) {
+      payload = maskWorkspaceForTenantUser(payload);
+    }
+    return res.json(payload);
   } catch (e) {
     console.error('PUT /workspace CRASH:', e);
     return res.status(500).json({ error: 'Failed to save workspace', detail: e.message });

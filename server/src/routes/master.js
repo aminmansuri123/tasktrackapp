@@ -6,7 +6,7 @@ const requireMaster = require('../middleware/requireMaster');
 const { usersToClientShapeForTenant } = require('../services/userSync');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
-const { getSiteSettings, sanitizePolicyBody } = require('../services/registrationPolicy');
+const { getSiteSettings, sanitizePolicyBody, sanitizeBlockedLists } = require('../services/registrationPolicy');
 const { allocateUniqueUserId } = require('../services/userSync');
 const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
@@ -331,6 +331,8 @@ router.get('/registration-policy', authMiddleware, requireMaster, async (_req, r
       registrationMode: s.registrationMode,
       allowedEmails: s.allowedEmails || [],
       allowedDomains: s.allowedDomains || [],
+      blockedEmails: s.blockedEmails || [],
+      blockedDomains: s.blockedDomains || [],
       sessionIdleTimeoutMinutes:
         s.sessionIdleTimeoutMinutes != null ? Number(s.sessionIdleTimeoutMinutes) || 0 : 0,
     });
@@ -357,11 +359,18 @@ router.put('/registration-policy', authMiddleware, requireMaster, async (req, re
       }
       s.sessionIdleTimeoutMinutes = n;
     }
+    if (req.body && (req.body.blockedEmails !== undefined || req.body.blockedDomains !== undefined)) {
+      const bl = sanitizeBlockedLists(req.body || {});
+      s.blockedEmails = bl.blockedEmails;
+      s.blockedDomains = bl.blockedDomains;
+    }
     await s.save();
     return res.json({
       registrationMode: s.registrationMode,
       allowedEmails: s.allowedEmails,
       allowedDomains: s.allowedDomains,
+      blockedEmails: s.blockedEmails || [],
+      blockedDomains: s.blockedDomains || [],
       sessionIdleTimeoutMinutes:
         s.sessionIdleTimeoutMinutes != null ? Number(s.sessionIdleTimeoutMinutes) || 0 : 0,
     });

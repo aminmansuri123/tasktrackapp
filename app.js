@@ -1,4 +1,4 @@
-const APP_VERSION = '16.0.1';
+const APP_VERSION = '16.1.0';
 
 let __loginErrorDismissTimer = null;
 
@@ -1308,6 +1308,10 @@ async function login() {
                 if (t) {
                     try {
                         const j = JSON.parse(t);
+                        if (j.code === 'BLOCKED' && j.error) {
+                            showError('loginError', j.error);
+                            return;
+                        }
                         if (j.error) errMsg = j.error;
                     } catch {
                         errMsg = t.slice(0, 200);
@@ -1449,6 +1453,10 @@ async function register() {
                 if (t) {
                     try {
                         const j = JSON.parse(t);
+                        if (j.code === 'BLOCKED' && j.error) {
+                            showError('loginError', j.error);
+                            return;
+                        }
                         if (j.error === 'APPROVAL_REQUIRED') {
                             showError('loginError', 'Your email/domain is not on the allowed list. You can request approval from the administrator.');
                             showApprovalRequestOption(name, email);
@@ -1725,6 +1733,15 @@ function applyFeatureTabVisibility() {
 function switchTab(tabName, eventElement, skipAutoRender = false) {
     const canSettings = currentUser && (currentUser.role === 'admin' || currentUser.isMaster);
     if (tabName === 'settings' && !canSettings) {
+        return;
+    }
+    const tenantAdminOnlyTabs = ['milestones', 'planner', 'notes', 'learningNotes', 'journal'];
+    if (
+        tenantAdminOnlyTabs.includes(tabName) &&
+        currentUser &&
+        !currentUser.isMaster &&
+        currentUser.role !== 'admin'
+    ) {
         return;
     }
     const feats = currentUserFeatures();
@@ -4872,6 +4889,14 @@ function openInteractiveTaskPopup(taskId) {
 
 function closeInteractiveTaskPopup() {
     document.getElementById('interactiveTaskPopup').classList.remove('active');
+    const rrTab = document.getElementById('recurringReport');
+    if (rrTab && rrTab.classList.contains('active')) {
+        try {
+            renderRecurringReport();
+        } catch (e) {
+            console.error(e);
+        }
+    }
 }
 
 function saveQuickTask(event) {
@@ -5448,7 +5473,7 @@ function renderRecurringReport() {
                 }
             }
 
-            return `<td style="font-size: 12px; background: ${bgColor}; color: ${textColor};">${statusText}${completionPart}</td>`;
+            return `<td style="font-size: 12px; background: ${bgColor}; color: ${textColor}; cursor: pointer;" title="Click to update status" onclick="event.stopPropagation(); openInteractiveTaskPopup(${instance.id})">${statusText}${completionPart}</td>`;
         }).join('');
 
         return `
@@ -6308,6 +6333,15 @@ function renderSettings() {
                     <label>Allowed domains (one per line, e.g. ameyalogistics.com) — checked second. Subdomains allowed automatically.</label>
                     <textarea id="masterRegDomains" class="form-control" rows="3" placeholder="company.com"></textarea>
                 </div>
+                <p style="color:#666;font-size:13px;margin-top:8px;">Blocklist (applied in addition to allowed rules): sign-in and self-service registration are denied for these emails or domains.</p>
+                <div class="form-group">
+                    <label>Blocked emails (one per line)</label>
+                    <textarea id="masterRegBlockedEmails" class="form-control" rows="3" placeholder="bad@example.com"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Blocked domains (one per line)</label>
+                    <textarea id="masterRegBlockedDomains" class="form-control" rows="2" placeholder="competitor.com"></textarea>
+                </div>
                 <div class="form-group">
                     <label for="masterSessionIdleMinutes">Session idle timeout (minutes)</label>
                     <input type="number" id="masterSessionIdleMinutes" class="form-control" min="0" max="10080" step="1" style="max-width:140px;">
@@ -6667,6 +6701,10 @@ async function masterRegistrationPolicyHydrate() {
         const td = document.getElementById('masterRegDomains');
         if (te && Array.isArray(p.allowedEmails)) te.value = p.allowedEmails.join('\n');
         if (td && Array.isArray(p.allowedDomains)) td.value = p.allowedDomains.join('\n');
+        const be = document.getElementById('masterRegBlockedEmails');
+        const bd = document.getElementById('masterRegBlockedDomains');
+        if (be && Array.isArray(p.blockedEmails)) be.value = p.blockedEmails.join('\n');
+        if (bd && Array.isArray(p.blockedDomains)) bd.value = p.blockedDomains.join('\n');
         const idleEl = document.getElementById('masterSessionIdleMinutes');
         if (idleEl) idleEl.value = p.sessionIdleTimeoutMinutes != null ? String(p.sessionIdleTimeoutMinutes) : '0';
     } catch (e) {
@@ -6721,15 +6759,26 @@ async function saveMasterRegistrationPolicy() {
     const mode = (sel && sel.value) || 'open';
     const emailsRaw = (document.getElementById('masterRegEmails') && document.getElementById('masterRegEmails').value) || '';
     const domainsRaw = (document.getElementById('masterRegDomains') && document.getElementById('masterRegDomains').value) || '';
+    const blockedEmailsRaw = (document.getElementById('masterRegBlockedEmails') && document.getElementById('masterRegBlockedEmails').value) || '';
+    const blockedDomainsRaw = (document.getElementById('masterRegBlockedDomains') && document.getElementById('masterRegBlockedDomains').value) || '';
     const allowedEmails = emailsRaw.split(/[\n,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
     const allowedDomains = domainsRaw.split(/[\n,;]+/).map(s => s.trim().toLowerCase().replace(/^@+/, '')).filter(Boolean);
+    const blockedEmails = blockedEmailsRaw.split(/[\n,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    const blockedDomains = blockedDomainsRaw.split(/[\n,;]+/).map(s => s.trim().toLowerCase().replace(/^@+/, '')).filter(Boolean);
     const idleEl = document.getElementById('masterSessionIdleMinutes');
     let sessionIdleTimeoutMinutes = idleEl ? parseInt(idleEl.value, 10) : 0;
     if (Number.isNaN(sessionIdleTimeoutMinutes) || sessionIdleTimeoutMinutes < 0) sessionIdleTimeoutMinutes = 0;
     try {
         const res = await apiFetch('/api/master/registration-policy', {
             method: 'PUT',
-            body: JSON.stringify({ registrationMode: mode, allowedEmails, allowedDomains, sessionIdleTimeoutMinutes }),
+            body: JSON.stringify({
+                registrationMode: mode,
+                allowedEmails,
+                allowedDomains,
+                blockedEmails,
+                blockedDomains,
+                sessionIdleTimeoutMinutes,
+            }),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));

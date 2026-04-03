@@ -11,7 +11,11 @@ const {
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const { isProduction, EMAIL_CONFIGURED } = require('../config');
 const { usersToClientShapeAll, usersToClientShapeForTenant } = require('../services/userSync');
-const { assertRegistrationAllowed, getSiteSettings } = require('../services/registrationPolicy');
+const {
+  assertRegistrationAllowed,
+  assertEmailNotBlocked,
+  getSiteSettings,
+} = require('../services/registrationPolicy');
 const { allocateUniqueUserId } = require('../services/userSync');
 const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const Workspace = require('../models/Workspace');
@@ -130,6 +134,10 @@ router.post('/register', validateBody(registerBodySchema), async (req, res) => {
     }
     if (denied) {
       return res.status(403).json({ error: denied });
+    }
+    const blockedReg = await assertEmailNotBlocked(em);
+    if (blockedReg === 'BLOCKED') {
+      return res.status(403).json({ error: 'This email or domain is not allowed to register.', code: 'BLOCKED' });
     }
     const accountType = req.body.accountType === 'team_user' ? 'team_user' : 'org_admin';
     const passwordHash = await bcrypt.hash(String(password), 12);
@@ -261,6 +269,10 @@ router.post('/forgot-password/request', validateBody(forgotPasswordRequestSchema
     if (!em) {
       return res.status(400).json({ error: 'Email is required' });
     }
+    const blockedFp = await assertEmailNotBlocked(em);
+    if (blockedFp === 'BLOCKED') {
+      return forgotRequestGenericResponse(res);
+    }
     const doc = await User.findOne({ email: em });
     if (!doc || !doc.isActive) {
       return forgotRequestGenericResponse(res);
@@ -339,6 +351,13 @@ router.post('/login', validateBody(loginBodySchema), async (req, res) => {
   try {
     const { email, password } = req.body;
     const em = String(email).toLowerCase().trim();
+    const blockedLogin = await assertEmailNotBlocked(em);
+    if (blockedLogin === 'BLOCKED') {
+      return res.status(403).json({
+        error: 'This email or domain is not allowed to sign in.',
+        code: 'BLOCKED',
+      });
+    }
     const doc = await User.findOne({ email: em });
     if (!doc) {
       return res.status(401).json({ error: 'Invalid email or password' });
