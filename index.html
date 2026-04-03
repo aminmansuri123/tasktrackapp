@@ -641,11 +641,6 @@
             display: inline-block;
         }
 
-        /* Milestones, Planner, Notes, Learning Notes, Diary: tenant admins only (not team users). Master has .user-admin. */
-        body:not(.user-admin) .tenant-admin-only {
-            display: none !important;
-        }
-
         .header-title-block {
             display: flex;
             flex-direction: column;
@@ -1415,11 +1410,11 @@
             <button class="nav-tab" onclick="switchTab('interactive', this)">Task View</button>
             <button class="nav-tab" onclick="switchTab('drilldown', this)">Drilldown</button>
             <button class="nav-tab" onclick="switchTab('tasks', this)">Task Setup</button>
-            <button class="nav-tab tenant-admin-only" id="navTabMilestones" onclick="switchTab('milestones', this)">🏆 Milestones</button>
-            <button class="nav-tab tenant-admin-only" id="navTabPlanner" onclick="switchTab('planner', this)">Planner</button>
-            <button class="nav-tab tenant-admin-only" id="navTabNotes" onclick="switchTab('notes', this)">📝 Notes</button>
-            <button class="nav-tab tenant-admin-only" id="navTabLearningNotes" onclick="switchTab('learningNotes', this)">📚 Learning Notes</button>
-            <button class="nav-tab tenant-admin-only" id="navTabJournal" onclick="switchTab('journal', this)">Diary</button>
+            <button class="nav-tab" id="navTabMilestones" onclick="switchTab('milestones', this)">🏆 Milestones</button>
+            <button class="nav-tab" id="navTabPlanner" onclick="switchTab('planner', this)">Planner</button>
+            <button class="nav-tab" id="navTabNotes" onclick="switchTab('notes', this)">📝 Notes</button>
+            <button class="nav-tab" id="navTabLearningNotes" onclick="switchTab('learningNotes', this)">📚 Learning Notes</button>
+            <button class="nav-tab" id="navTabJournal" onclick="switchTab('journal', this)">Diary</button>
             <button class="nav-tab" id="navTabLocations" onclick="switchTab('locations', this)">📂 Locations</button>
             <button class="nav-tab" id="navTabSnippets" onclick="switchTab('snippets', this)">💻 Code Snippets</button>
             <button class="nav-tab" onclick="switchTab('recurringReport', this)">Dashboard</button>
@@ -1820,7 +1815,7 @@
             </div>
 
             <!-- Milestones Tab -->
-            <div id="milestones" class="tab-content tenant-admin-only">
+            <div id="milestones" class="tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2>🏆 Milestones</h2>
                     <div>
@@ -1840,7 +1835,7 @@
             </div>
 
             <!-- Daily Planner Tab -->
-            <div id="planner" class="tab-content tenant-admin-only">
+            <div id="planner" class="tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2>📅 Planner</h2>
                     <div>
@@ -1862,7 +1857,7 @@
             </div>
 
             <!-- Notes Tab -->
-            <div id="notes" class="tab-content tenant-admin-only">
+            <div id="notes" class="tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2>📝 Notes</h2>
                     <button class="btn btn-primary" onclick="openNoteModal()">+ Add Note</button>
@@ -1903,7 +1898,7 @@
             </div>
 
             <!-- Learning Notes Tab -->
-            <div id="learningNotes" class="tab-content tenant-admin-only">
+            <div id="learningNotes" class="tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
                     <h2>📚 Learning Notes</h2>
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
@@ -1966,7 +1961,7 @@
             </div>
 
             <!-- Diary Tab -->
-            <div id="journal" class="tab-content tenant-admin-only">
+            <div id="journal" class="tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
                     <h2>Diary</h2>
                     <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">

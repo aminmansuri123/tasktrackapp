@@ -32,18 +32,110 @@ const {
 
 const router = express.Router();
 
-const EXPORT_VERSION = '16.1.0';
+const EXPORT_VERSION = '16.1.1';
 
-/** Non-admin tenant users: hide admin-managed content; tasks/users/locations still needed. */
-function maskWorkspaceForTenantUser(normalized) {
+function isLegacyFlatJournal(j) {
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return false;
+  const keys = Object.keys(j);
+  if (keys.length === 0) return false;
+  return keys.every((k) => /^\d{4}-\d{2}-\d{2}$/.test(k) && typeof j[k] === 'string');
+}
+
+/** Legacy flat journal { 'YYYY-MM-DD': html } → { [userId]: { 'YYYY-MM-DD': html } } */
+function ensureJournalNested(journal, legacyOwnerUserId) {
+  if (!journal || typeof journal !== 'object') return {};
+  if (isLegacyFlatJournal(journal)) {
+    return { [String(legacyOwnerUserId)]: { ...journal } };
+  }
+  const keys = Object.keys(journal);
+  if (keys.length === 0) return {};
+  const first = journal[keys[0]];
+  if (first && typeof first === 'object' && !Array.isArray(first)) {
+    const out = {};
+    for (const k of keys) {
+      const v = journal[k];
+      if (v && typeof v === 'object' && !Array.isArray(v)) out[k] = { ...v };
+    }
+    return out;
+  }
+  return { [String(legacyOwnerUserId)]: {} };
+}
+
+function journalFlatForUser(nestedJournal, userId) {
+  const slice = nestedJournal && nestedJournal[String(userId)];
+  if (slice && typeof slice === 'object' && !Array.isArray(slice)) return { ...slice };
+  return {};
+}
+
+function mergeJournalUserSlice(existingJournal, incomingFlat, userId, tenantRoot) {
+  const nested = ensureJournalNested(existingJournal, tenantRoot);
+  const u = String(userId);
+  const next = { ...nested };
+  next[u] = incomingFlat && typeof incomingFlat === 'object' ? { ...incomingFlat } : {};
+  return next;
+}
+
+function filterByCreatedBy(arr, userId) {
+  const uid = Number(userId);
+  return (Array.isArray(arr) ? arr : []).filter(
+    (item) => item && item.created_by != null && Number(item.created_by) === uid
+  );
+}
+
+function mergeArrayByCreatedBy(existing, incoming, userId) {
+  const uid = Number(userId);
+  const ex = Array.isArray(existing) ? existing : [];
+  const inc = Array.isArray(incoming) ? incoming : [];
+  const rest = ex.filter((item) => {
+    const cb = item && item.created_by != null ? Number(item.created_by) : null;
+    return cb !== uid;
+  });
+  const mine = inc.filter((item) => item && Number(item.created_by) === uid);
+  return [...rest, ...mine];
+}
+
+/** Migrate legacy shared journal + items without created_by (assign to tenant root). */
+function migrateWorkspaceDataInPlace(ws, tenantRoot) {
+  if (!ws.data || typeof ws.data !== 'object') return false;
+  let changed = false;
+  const d = ws.data;
+  if (isLegacyFlatJournal(d.journal)) {
+    d.journal = { [String(tenantRoot)]: { ...d.journal } };
+    changed = true;
+  }
+  const listKeys = ['milestones', 'notes', 'learningNotes', 'dailyPlanner'];
+  for (const key of listKeys) {
+    if (!Array.isArray(d[key])) continue;
+    for (const item of d[key]) {
+      if (item && item.created_by == null) {
+        item.created_by = tenantRoot;
+        changed = true;
+      }
+    }
+  }
+  if (Array.isArray(d.codeSnippets)) {
+    for (const item of d.codeSnippets) {
+      if (item && item.created_by == null) {
+        item.created_by = tenantRoot;
+        changed = true;
+      }
+    }
+  }
+  if (changed) ws.markModified('data');
+  return changed;
+}
+
+/** Non-admin: only this user's rows + their diary slice. Admins use full arrays; diary still per-user in API. */
+function scopeWorkspaceForTenantUser(normalized, userId, tenantRoot) {
+  const nested = ensureJournalNested(normalized.journal, tenantRoot);
   return {
     ...normalized,
-    milestones: [],
-    notes: [],
-    learningNotes: [],
-    journal: {},
-    dailyPlanner: [],
-    codeSnippets: [],
+    milestones: filterByCreatedBy(normalized.milestones, userId),
+    notes: filterByCreatedBy(normalized.notes, userId),
+    learningNotes: filterByCreatedBy(normalized.learningNotes, userId),
+    dailyPlanner: filterByCreatedBy(normalized.dailyPlanner, userId),
+    codeSnippets: filterByCreatedBy(normalized.codeSnippets, userId),
+    journal: journalFlatForUser(nested, userId),
   };
 }
 
@@ -291,6 +383,14 @@ router.get('/', authMiddleware, async (req, res) => {
       return res.status(500).json({ error: 'Failed to load workspace' });
     }
 
+    try {
+      if (migrateWorkspaceDataInPlace(ws, tenantRoot)) {
+        await ws.save();
+      }
+    } catch (migErr) {
+      console.error('GET /workspace migrate:', migErr.message);
+    }
+
     const normalized = normalizeWorkspacePayload(ws.data);
     const users = await loadTenantUsers(tenantRoot, req.user.userId);
     console.log(`GET /workspace uid=${req.user.userId} tenantRoot=${tenantRoot} users=${users.length}`);
@@ -328,9 +428,12 @@ router.get('/', authMiddleware, async (req, res) => {
       console.error('GET /workspace: could not persist into ws.data:', saveErr.message);
     }
 
-    let out = { ...normalized };
+    const nestedJ = ensureJournalNested(normalized.journal, tenantRoot);
+    let out = { ...normalized, journal: nestedJ };
     if (req.user.role !== 'admin') {
-      out = maskWorkspaceForTenantUser(out);
+      out = scopeWorkspaceForTenantUser(out, req.user.userId, tenantRoot);
+    } else {
+      out = { ...normalized, journal: journalFlatForUser(nestedJ, req.user.userId) };
     }
     if (ws.updatedAt) {
       out._workspaceUpdatedAt = ws.updatedAt.toISOString();
@@ -361,6 +464,14 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
       return res.status(500).json({ error: 'Failed to save workspace' });
     }
 
+    try {
+      if (migrateWorkspaceDataInPlace(ws, tenantRoot)) {
+        await ws.save();
+      }
+    } catch (migErr) {
+      console.error('PUT /workspace migrate:', migErr.message);
+    }
+
     const existingNormalized = normalizeWorkspacePayload(ws.data);
     const incoming = normalizeWorkspacePayload(req.body);
     if (Array.isArray(incoming.tasks)) {
@@ -368,18 +479,39 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
     }
 
     const merged = { ...incoming };
+    merged.journal = mergeJournalUserSlice(
+      existingNormalized.journal,
+      incoming.journal,
+      req.user.userId,
+      tenantRoot
+    );
 
     if (!isAdmin) {
       merged.users = await loadTenantUsers(tenantRoot, req.user.userId);
       merged.locations = existingNormalized.locations;
       merged.segregationTypes = existingNormalized.segregationTypes;
       merged.holidays = existingNormalized.holidays;
-      merged.milestones = existingNormalized.milestones;
-      merged.notes = existingNormalized.notes;
-      merged.learningNotes = existingNormalized.learningNotes;
-      merged.journal = existingNormalized.journal;
-      merged.dailyPlanner = existingNormalized.dailyPlanner;
-      merged.codeSnippets = existingNormalized.codeSnippets;
+      merged.milestones = mergeArrayByCreatedBy(
+        existingNormalized.milestones,
+        incoming.milestones,
+        req.user.userId
+      );
+      merged.notes = mergeArrayByCreatedBy(existingNormalized.notes, incoming.notes, req.user.userId);
+      merged.learningNotes = mergeArrayByCreatedBy(
+        existingNormalized.learningNotes,
+        incoming.learningNotes,
+        req.user.userId
+      );
+      merged.dailyPlanner = mergeArrayByCreatedBy(
+        existingNormalized.dailyPlanner,
+        incoming.dailyPlanner,
+        req.user.userId
+      );
+      merged.codeSnippets = mergeArrayByCreatedBy(
+        existingNormalized.codeSnippets,
+        incoming.codeSnippets,
+        req.user.userId
+      );
     } else {
       try {
         const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
@@ -423,7 +555,10 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
 
     let payload = { ...merged };
     if (!isAdmin) {
-      payload = maskWorkspaceForTenantUser(payload);
+      payload = scopeWorkspaceForTenantUser(payload, req.user.userId, tenantRoot);
+    } else {
+      const nestedJ = ensureJournalNested(merged.journal, tenantRoot);
+      payload = { ...merged, journal: journalFlatForUser(nestedJ, req.user.userId) };
     }
     return res.json(payload);
   } catch (e) {

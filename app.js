@@ -1,4 +1,4 @@
-const APP_VERSION = '16.1.0';
+const APP_VERSION = '16.1.1';
 
 let __loginErrorDismissTimer = null;
 
@@ -617,6 +617,19 @@ function isMasterUserRecord(u) {
     if (u.isMaster === true) return true;
     const em = (u.email || '').toLowerCase();
     return em === MASTER_ACCOUNT_EMAIL;
+}
+
+/** Account users (non-admin): Milestones/Notes/etc. are filtered to rows with matching created_by (API + client). */
+function isTenantTeamUser() {
+    return !!(currentUser && !currentUser.isMaster && currentUser.role !== 'admin');
+}
+
+function filterItemsByCreatedBy(arr) {
+    if (!isTenantTeamUser() || !currentUser) return arr || [];
+    const uid = Number(currentUser.id);
+    return (arr || []).filter(
+        (item) => item && item.created_by != null && Number(item.created_by) === uid
+    );
 }
 
 /** Master Settings: filter dropdown for User Management + account status table. */
@@ -1733,15 +1746,6 @@ function applyFeatureTabVisibility() {
 function switchTab(tabName, eventElement, skipAutoRender = false) {
     const canSettings = currentUser && (currentUser.role === 'admin' || currentUser.isMaster);
     if (tabName === 'settings' && !canSettings) {
-        return;
-    }
-    const tenantAdminOnlyTabs = ['milestones', 'planner', 'notes', 'learningNotes', 'journal'];
-    if (
-        tenantAdminOnlyTabs.includes(tabName) &&
-        currentUser &&
-        !currentUser.isMaster &&
-        currentUser.role !== 'admin'
-    ) {
         return;
     }
     const feats = currentUserFeatures();
@@ -9016,7 +9020,8 @@ function saveNote(event) {
                     is_hidden: false,
                     is_password_protected: isPasswordProtected,
                     created_at: new Date().toISOString(),
-                    updated_at: null
+                    updated_at: null,
+                    created_by: currentUser ? currentUser.id : null
                 };
                 data.notes.push(newNote);
             }
@@ -9120,8 +9125,8 @@ function renderNotes() {
 
     if (!container) return;
 
-    // Filter notes
-    let notes = data.notes || [];
+    // Filter notes (team users: own rows only; admin sees all)
+    let notes = filterItemsByCreatedBy(data.notes || []);
 
     // Filter by category
     if (currentNoteCategory) {
@@ -9707,8 +9712,8 @@ function renderMilestones() {
         localStorage.removeItem(MILESTONE_YEAR_FILTER_KEY);
     }
 
-    // Filter milestones
-    let filteredMilestones = data.milestones || [];
+    // Filter milestones (team users: own rows only)
+    let filteredMilestones = filterItemsByCreatedBy(data.milestones || []);
     if (yearFilter) {
         filteredMilestones = filteredMilestones.filter(m => {
             if (!m.date) return false;
@@ -9877,7 +9882,7 @@ function exportMilestonesCSV() {
     const toDate = prompt('Enter To Date (DD-MM-YYYY) or leave empty for all:');
 
     const data = getData();
-    let milestones = data.milestones || [];
+    let milestones = filterItemsByCreatedBy(data.milestones || []);
 
     // Filter by date range if provided
     if (fromDate || toDate) {
@@ -9944,8 +9949,12 @@ function renderDailyPlanner() {
     const data = getData();
     if (!data.dailyPlanner) data.dailyPlanner = [];
 
-    // Find planner entry for selected date
-    const plannerEntry = data.dailyPlanner.find(p => p.date === selectedDate);
+    // Find planner entry for selected date (per user when not admin)
+    const plannerEntry = isTenantTeamUser()
+        ? data.dailyPlanner.find(
+            p => p.date === selectedDate && Number(p.created_by) === Number(currentUser.id)
+        )
+        : data.dailyPlanner.find(p => p.date === selectedDate);
 
     const dateDisplay = formatDateDisplay(selectedDate);
 
@@ -10013,7 +10022,11 @@ function openPlannerModal(date = null) {
 
     const data = getData();
     if (!data.dailyPlanner) data.dailyPlanner = [];
-    const plannerEntry = data.dailyPlanner.find(p => p.date === selectedDate);
+    const plannerEntry = isTenantTeamUser()
+        ? data.dailyPlanner.find(
+            p => p.date === selectedDate && Number(p.created_by) === Number(currentUser.id)
+        )
+        : data.dailyPlanner.find(p => p.date === selectedDate);
 
     if (plannerEntry) {
         document.getElementById('plannerModalTitle').textContent = 'Edit Daily Planner';
@@ -10078,8 +10091,12 @@ function saveDailyPlanner(event) {
                 };
             }
         } else {
-            // Check if entry already exists for this date
-            const existingIndex = data.dailyPlanner.findIndex(p => p.date === date);
+            // Check if entry already exists for this date (per user for team accounts)
+            const existingIndex = isTenantTeamUser()
+                ? data.dailyPlanner.findIndex(
+                    p => p.date === date && Number(p.created_by) === Number(currentUser.id)
+                )
+                : data.dailyPlanner.findIndex(p => p.date === date);
             if (existingIndex !== -1) {
                 data.dailyPlanner[existingIndex] = {
                     ...data.dailyPlanner[existingIndex],
@@ -10114,7 +10131,7 @@ function exportPlannerCSV() {
     const toDate = prompt('Enter To Date (DD-MM-YYYY) or leave empty for all:');
 
     const data = getData();
-    let plannerEntries = data.dailyPlanner || [];
+    let plannerEntries = filterItemsByCreatedBy(data.dailyPlanner || []);
 
     // Filter by date range if provided
     if (fromDate || toDate) {
@@ -10605,7 +10622,7 @@ const SNIPPET_LANGUAGES = { python: 'Python', sql: 'SQL', java: 'Java', vba: 'Ex
 
 function renderCodeSnippets() {
     const data = getData();
-    const snippets = Array.isArray(data.codeSnippets) ? data.codeSnippets : [];
+    const snippets = filterItemsByCreatedBy(Array.isArray(data.codeSnippets) ? data.codeSnippets : []);
     const langFilter = (document.getElementById('snippetLanguageFilter') || {}).value;
     const search = ((document.getElementById('snippetSearch') || {}).value || '').toLowerCase().trim();
 
@@ -10686,7 +10703,8 @@ function saveSnippet(event) {
             language,
             code,
             createdAt: Date.now(),
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
+            created_by: currentUser ? currentUser.id : null
         });
     }
     saveData(data);
@@ -11344,7 +11362,7 @@ function deleteLearningNote(noteId) {
 
 function getFilteredLearningNotes() {
     const data = getData();
-    const notes = Array.isArray(data.learningNotes) ? data.learningNotes : [];
+    const notes = filterItemsByCreatedBy(Array.isArray(data.learningNotes) ? data.learningNotes : []);
     const q = (document.getElementById('learningSearchInput')?.value || '').toLowerCase().trim();
     const courseFilter = document.getElementById('learningFilterCourse')?.value || '';
     const tagFilter = document.getElementById('learningFilterTag')?.value || '';
