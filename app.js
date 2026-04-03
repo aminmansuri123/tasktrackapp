@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.0';
+const APP_VERSION = '17.2.1';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -2401,12 +2401,12 @@ function renderTemplateItemsHtml(items, blockId, prefix) {
             return `
             <div style="margin-left:${margin}px;border-left:2px solid #e0e7ff;padding-left:10px;margin-bottom:10px;">
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                    <input type="checkbox" ${it.checked ? 'checked' : ''} onchange="templateItemSetChecked(${bidJs},${pathJs},this.checked)" />
-                    <input type="text" class="form-control" style="flex:1;min-width:180px;font-size:14px;" value="${escapeHtml(it.label)}" onchange="templateItemSetLabel(${bidJs},${pathJs},this.value)" />
+                    <input type="checkbox" ${it.checked ? 'checked' : ''} onchange='templateItemSetChecked(${bidJs},${pathJs},this.checked)' />
+                    <input type="text" class="form-control" style="flex:1;min-width:180px;font-size:14px;" value="${escapeHtml(it.label)}" onchange='templateItemSetLabel(${bidJs},${pathJs},this.value)' />
                 </div>
                 <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
-                    <button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;" onclick="templateAddChildItem(${bidJs},${pathJs})">Add sub-item</button>
-                    <button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;" onclick="templateRemoveItem(${bidJs},${pathJs})">Remove</button>
+                    <button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;" onclick='templateAddChildItem(${bidJs},${pathJs})'>Add sub-item</button>
+                    <button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;" onclick='templateRemoveItem(${bidJs},${pathJs})'>Remove</button>
                 </div>
                 ${sub}
             </div>`;
@@ -2579,21 +2579,24 @@ function renderTemplateTab() {
                         const bidJs = JSON.stringify(bid);
                         return `
                 <div class="card" style="margin:0;overflow:hidden;border-left:4px solid ${border};">
-                    <button type="button" onclick="toggleTemplateCard(${bidJs})" style="width:100%;text-align:left;background:transparent;border:none;padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;">
-                        <span id="templateChev_${safe}" style="font-size:18px;color:#667eea;">▸</span>
-                        <span style="font-size:18px;font-weight:600;color:#333;">${escapeHtml(t.title || 'Untitled')}</span>
-                    </button>
+                    <div style="display:flex;align-items:stretch;gap:8px;">
+                        <button type="button" onclick='toggleTemplateCard(${bidJs})' style="flex:1;text-align:left;background:transparent;border:none;padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;min-width:0;">
+                            <span id="templateChev_${safe}" style="font-size:18px;color:#667eea;flex-shrink:0;">▸</span>
+                            <span style="font-size:18px;font-weight:600;color:#333;">${escapeHtml(t.title || 'Untitled')}</span>
+                        </button>
+                        <button type="button" class="btn btn-danger" onclick='templateDeleteBlock(${bidJs})' style="align-self:center;margin:8px 12px 8px 0;padding:8px 12px;font-size:12px;white-space:nowrap;flex-shrink:0;" title="Remove this entire template block">Remove block</button>
+                    </div>
                     <div id="templateBody_${safe}" style="display:none;padding:0 16px 16px 44px;">
                         <label style="display:block;margin-bottom:10px;font-size:13px;color:#555;">Title
-                            <input type="text" class="form-control" style="margin-top:4px;" value="${escapeHtml(t.title || '')}" onchange="templateSetBlockTitle(${bidJs}, this.value)" />
+                            <input type="text" class="form-control" style="margin-top:4px;" value="${escapeHtml(t.title || '')}" onchange='templateSetBlockTitle(${bidJs}, this.value)' />
                         </label>
                         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-                            <button type="button" class="btn btn-secondary" onclick="templateAddRootItem(${bidJs})">Add item</button>
-                            <button type="button" class="btn btn-secondary" onclick="templateRemoveAllItems(${bidJs})">Remove all items</button>
-                            <button type="button" class="btn btn-secondary" onclick="templateResetCheckboxes(${bidJs})">Reset all checkboxes</button>
-                            <button type="button" class="btn btn-secondary" onclick="copyTemplateChecklist(${bidJs})">Copy checklist</button>
+                            <button type="button" class="btn btn-secondary" onclick='templateAddRootItem(${bidJs})'>Add item</button>
+                            <button type="button" class="btn btn-secondary" onclick='templateRemoveAllItems(${bidJs})'>Remove all items</button>
+                            <button type="button" class="btn btn-secondary" onclick='templateResetCheckboxes(${bidJs})'>Reset all checkboxes</button>
+                            <button type="button" class="btn btn-secondary" onclick='copyTemplateChecklist(${bidJs})'>Copy checklist</button>
                             <button type="button" class="btn btn-primary" onclick="switchTab('tasks', null)">Open Task Setup</button>
-                            <button type="button" class="btn btn-danger" onclick="templateDeleteBlock(${bidJs})">Delete block</button>
+                            <button type="button" class="btn btn-danger" onclick='templateDeleteBlock(${bidJs})'>Delete block</button>
                         </div>
                         ${renderTemplateItemsHtml(t.items || [], bid, '')}
                     </div>
