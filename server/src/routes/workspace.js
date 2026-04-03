@@ -29,10 +29,11 @@ const {
   parseWorkspaceRestoreBody,
   emailTaskViewSummarySchema,
 } = require('../validation/schemas');
+const { getSiteSettings } = require('../services/registrationPolicy');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '16.1.1';
+const EXPORT_VERSION = '17.0.0';
 
 function isLegacyFlatJournal(j) {
   if (!j || typeof j !== 'object' || Array.isArray(j)) return false;
@@ -438,6 +439,12 @@ router.get('/', authMiddleware, async (req, res) => {
     if (ws.updatedAt) {
       out._workspaceUpdatedAt = ws.updatedAt.toISOString();
     }
+    try {
+      const site = await getSiteSettings();
+      out.reportToOptions = Array.isArray(site.reportToOptions) ? site.reportToOptions : [];
+    } catch (_) {
+      out.reportToOptions = [];
+    }
     return res.json(out);
   } catch (e) {
     console.error('GET /workspace CRASH:', e);
@@ -559,6 +566,12 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
     } else {
       const nestedJ = ensureJournalNested(merged.journal, tenantRoot);
       payload = { ...merged, journal: journalFlatForUser(nestedJ, req.user.userId) };
+    }
+    try {
+      const site = await getSiteSettings();
+      payload.reportToOptions = Array.isArray(site.reportToOptions) ? site.reportToOptions : [];
+    } catch (_) {
+      payload.reportToOptions = [];
     }
     return res.json(payload);
   } catch (e) {

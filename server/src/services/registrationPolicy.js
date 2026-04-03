@@ -65,6 +65,31 @@ function sanitizeBlockedLists(body) {
   return { blockedEmails, blockedDomains };
 }
 
+function sanitizeReportToOptions(body) {
+  const raw = body?.reportToOptions;
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  let n = 0;
+  for (const o of raw) {
+    if (!o || typeof o !== 'object') continue;
+    const label = String(o.label || '')
+      .trim()
+      .slice(0, 200);
+    if (!label) continue;
+    let id = String(o.id || '')
+      .trim()
+      .slice(0, 80);
+    if (!id) id = `rt_${Date.now()}_${n++}`;
+    out.push({
+      id,
+      label,
+      disabled: !!o.disabled,
+    });
+    if (out.length >= 200) break;
+  }
+  return out;
+}
+
 function sanitizePolicyBody(body) {
   const registrationMode = body?.registrationMode;
   if (!['open', 'restricted'].includes(registrationMode)) {
@@ -108,6 +133,7 @@ module.exports = {
   assertEmailNotBlocked,
   sanitizeBlockedLists,
   sanitizePolicyBody,
+  sanitizeReportToOptions,
   normalizeEmailEntry,
   normalizeDomainEntry,
 };

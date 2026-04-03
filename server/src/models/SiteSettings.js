@@ -17,6 +17,17 @@ const siteSettingsSchema = new mongoose.Schema(
     blockedDomains: { type: [String], default: [] },
     /** 0 = disabled. Master-only; enforced in auth middleware with User.lastActivityAt. */
     sessionIdleTimeoutMinutes: { type: Number, default: 0 },
+    /** Global "Report to" dropdown options (tasks). Master-managed. */
+    reportToOptions: {
+      type: [
+        {
+          id: { type: String, required: true },
+          label: { type: String, required: true },
+          disabled: { type: Boolean, default: false },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );

@@ -6,7 +6,12 @@ const requireMaster = require('../middleware/requireMaster');
 const { usersToClientShapeForTenant } = require('../services/userSync');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
-const { getSiteSettings, sanitizePolicyBody, sanitizeBlockedLists } = require('../services/registrationPolicy');
+const {
+  getSiteSettings,
+  sanitizePolicyBody,
+  sanitizeBlockedLists,
+  sanitizeReportToOptions,
+} = require('../services/registrationPolicy');
 const { allocateUniqueUserId } = require('../services/userSync');
 const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
@@ -335,6 +340,7 @@ router.get('/registration-policy', authMiddleware, requireMaster, async (_req, r
       blockedDomains: s.blockedDomains || [],
       sessionIdleTimeoutMinutes:
         s.sessionIdleTimeoutMinutes != null ? Number(s.sessionIdleTimeoutMinutes) || 0 : 0,
+      reportToOptions: Array.isArray(s.reportToOptions) ? s.reportToOptions : [],
     });
   } catch (e) {
     console.error(e);
@@ -364,6 +370,9 @@ router.put('/registration-policy', authMiddleware, requireMaster, async (req, re
       s.blockedEmails = bl.blockedEmails;
       s.blockedDomains = bl.blockedDomains;
     }
+    if (req.body && req.body.reportToOptions !== undefined) {
+      s.reportToOptions = sanitizeReportToOptions(req.body || {});
+    }
     await s.save();
     return res.json({
       registrationMode: s.registrationMode,
@@ -373,6 +382,7 @@ router.put('/registration-policy', authMiddleware, requireMaster, async (req, re
       blockedDomains: s.blockedDomains || [],
       sessionIdleTimeoutMinutes:
         s.sessionIdleTimeoutMinutes != null ? Number(s.sessionIdleTimeoutMinutes) || 0 : 0,
+      reportToOptions: Array.isArray(s.reportToOptions) ? s.reportToOptions : [],
     });
   } catch (e) {
     console.error(e);
@@ -425,7 +435,7 @@ router.post('/users/:userId/active', authMiddleware, requireMaster, async (req, 
   }
 });
 
-const VALID_FEATURES = ['locations', 'codeSnippets'];
+const VALID_FEATURES = ['locations', 'codeSnippets', 'intelligenceLayer', 'templateLibrary'];
 
 router.patch('/users/:userId/features', authMiddleware, requireMaster, async (req, res) => {
   try {

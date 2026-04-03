@@ -59,6 +59,8 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
         }
 
         .header h1 {
@@ -1397,6 +1399,10 @@
                 <span class="header-title-main">📋 Task Management System</span>
                 <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.8</span></span>
             </div>
+            <div class="header-global-search" style="flex:1;max-width:280px;margin:0 12px;position:relative;">
+                <input type="search" id="globalSearchInput" class="form-control" placeholder="Search tasks, notes, users, version…" autocomplete="off" style="width:100%;" title="Search across the app">
+                <div id="globalSearchResults" role="listbox" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:10050;background:#fff;border:1px solid #ddd;border-radius:8px;max-height:min(360px,50vh);overflow:auto;box-shadow:0 8px 24px rgba(0,0,0,0.12);margin-top:4px;"></div>
+            </div>
             <div class="user-info">
                 <span id="currentUser">Guest</span>
                 <button type="button" id="masterToolsHint" class="master-tools-hint" style="display: none;" title="Open Settings">Master tools → Settings (⚙)</button>
@@ -1418,6 +1424,8 @@
             <button class="nav-tab" id="navTabLocations" onclick="switchTab('locations', this)">📂 Locations</button>
             <button class="nav-tab" id="navTabSnippets" onclick="switchTab('snippets', this)">💻 Code Snippets</button>
             <button class="nav-tab" onclick="switchTab('recurringReport', this)">Dashboard</button>
+            <button type="button" class="nav-tab" id="navTabIntelligence" onclick="switchTab('intelligence', this)" style="display:none;">Intelligence</button>
+            <button type="button" class="nav-tab" id="navTabTemplates" onclick="switchTab('templates', this)" style="display:none;">Templates</button>
             <button class="nav-tab admin-only" onclick="switchTab('settings', this)" title="Settings">⚙ Settings</button>
             <button class="nav-tab" onclick="switchTab('calendar', this)" title="Calendar">📆</button>
         </div>
@@ -1689,6 +1697,13 @@
                                 <option value="high">High</option>
                                 <option value="medium">Medium</option>
                                 <option value="low">Low</option>
+                            </select>
+                        </div>
+                        <div style="flex: 1; min-width: 150px;">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Report to</label>
+                            <select class="form-control" id="filterDashboardReportTo"
+                                onchange="renderInteractiveDashboard()">
+                                <option value="">All</option>
                             </select>
                         </div>
                     </div>
@@ -2102,6 +2117,42 @@
                 <div id="recurringReportContainer" class="task-list"></div>
             </div>
 
+            <div id="intelligence" class="tab-content">
+                <h2>Intelligence Layer (Finance-focused)</h2>
+                <p style="color:#666;max-width:900px;">Use operational KPIs and trends to steer work—not just store it. All times use <strong>IST (UTC+05:30)</strong> in this app.</p>
+                <div class="card" style="margin:16px 0;">
+                    <h3>KPI Dashboard</h3>
+                    <ul style="line-height:1.7;color:#444;">
+                        <li>Close cycle days</li>
+                        <li>AP ageing processing time</li>
+                        <li>AR follow-up efficiency</li>
+                        <li>Task completion ratio</li>
+                    </ul>
+                </div>
+                <div class="card" style="margin:16px 0;">
+                    <h3>Bottleneck Analysis</h3>
+                    <p style="color:#555;">Identify tasks stuck &gt; X days; users with highest delays.</p>
+                </div>
+                <div class="card" style="margin:16px 0;">
+                    <h3>Variance Tracking</h3>
+                    <p style="color:#555;">Planned vs actual completion timelines for forecasting.</p>
+                </div>
+                <div class="card" style="margin:16px 0;">
+                    <h3>Trend Analysis</h3>
+                    <p style="color:#555;">Monthly task volume, delay trends, team productivity trends.</p>
+                </div>
+            </div>
+
+            <div id="templates" class="tab-content">
+                <h2>Template Library</h2>
+                <p style="color:#666;">Predefined workflows you can adopt or adapt.</p>
+                <ul style="line-height:2;font-size:16px;">
+                    <li><strong>Month-end closing checklist</strong></li>
+                    <li><strong>Audit preparation</strong></li>
+                    <li><strong>Budget cycle</strong></li>
+                </ul>
+            </div>
+
             <!-- Settings Tab (Admin Only) -->
             <div id="settings" class="tab-content">
                 <h2>Settings</h2>
@@ -2288,6 +2339,7 @@
                         <input type="password" class="form-control" id="loginPassword" name="password" placeholder="Min. 6 characters" autocomplete="off" required>
                     </div>
                     <button type="button" class="login-primary" id="loginSubmitBtn">Sign in</button>
+                    <div id="loginProgress" style="display:none;margin-top:12px;color:#2e7d32;font-weight:600;">Logging in…</div>
                     <div id="loginForgotRow" class="login-forgot-row hidden">
                         <button type="button" class="login-forgot-link" id="loginForgotPasswordLink">Forgot password?</button>
                     </div>
@@ -2378,6 +2430,10 @@
                 <div class="form-group">
                     <label>Assigned To *</label>
                     <select class="form-control" id="taskAssignedTo" required></select>
+                </div>
+                <div class="form-group">
+                    <label>Report to (optional)</label>
+                    <select class="form-control" id="taskReportTo"></select>
                 </div>
                 <div class="form-group">
                     <label>Location *</label>
@@ -2576,6 +2632,10 @@
                 <div class="form-group">
                     <label>Due Date *</label>
                     <input type="date" class="form-control" id="quickTaskDueDate" required>
+                </div>
+                <div class="form-group">
+                    <label>Report to (optional)</label>
+                    <select class="form-control" id="quickTaskReportTo"></select>
                 </div>
                 <div style="display: flex; gap: 10px; margin-top: 20px;">
                     <button type="button" class="btn btn-secondary" onclick="closeQuickTaskModal()"

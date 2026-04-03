@@ -1,4 +1,37 @@
-const APP_VERSION = '16.1.1';
+const APP_VERSION = '17.0.0';
+
+/** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
+const APP_TIMEZONE = 'Asia/Kolkata';
+
+function formatDateTimeIST(value) {
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleString('en-IN', { timeZone: APP_TIMEZONE, dateStyle: 'short', timeStyle: 'short' });
+}
+
+function getReportToOptionsActive() {
+    const data = getData();
+    const opts = Array.isArray(data.reportToOptions) ? data.reportToOptions : [];
+    return opts.filter(o => o && o.id && o.label && !o.disabled);
+}
+
+function populateReportToSelect(selectEl, selectedId) {
+    if (!selectEl) return;
+    const opts = getReportToOptionsActive();
+    const sel = selectedId != null && selectedId !== '' ? String(selectedId) : '';
+    selectEl.innerHTML = '<option value="">— None —</option>' + opts.map(o => {
+        const id = String(o.id).replace(/"/g, '&quot;');
+        return `<option value="${id}">${escapeHtml(o.label)}</option>`;
+    }).join('');
+    if (sel) selectEl.value = sel;
+}
+
+function reportToLabelForId(id) {
+    if (id == null || id === '') return '';
+    const opts = Array.isArray(getData().reportToOptions) ? getData().reportToOptions : [];
+    const o = opts.find(x => String(x.id) === String(id));
+    return o ? o.label : '';
+}
 
 let __loginErrorDismissTimer = null;
 
@@ -400,7 +433,8 @@ function defaultWorkspaceShell() {
         dailyPlanner: [],
         locationItems: [],
         codeSnippets: [],
-        journal: {}
+        journal: {},
+        reportToOptions: []
     };
 }
 
@@ -473,27 +507,42 @@ function formatDateString(date) {
     return `${year}-${month}-${day}`;
 }
 
-// Utility function to format dates as DD-MM-YYYY for display
+// Utility function to format dates as DD-MM-YYYY for display (timestamps shown in IST per APP_TIMEZONE)
 function formatDateDisplay(date) {
     if (!date) return '';
     let dateObj;
+    let useIstCalendar = false;
     if (typeof date === 'string') {
-        // Check if it's an ISO date string (contains T or has time component)
-        if (date.includes('T') || date.includes(' ')) {
+        if (date.includes('T') || (date.includes(' ') && /\d{1,2}:\d{2}/.test(date))) {
             dateObj = new Date(date);
+            useIstCalendar = true;
         } else {
-            // Parse YYYY-MM-DD format
             const parts = date.split('-');
             if (parts.length === 3) {
-                dateObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+                dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
             } else {
-                return date; // Return as-is if not in expected format
+                return date;
             }
         }
     } else if (date instanceof Date) {
         dateObj = date;
+        useIstCalendar = true;
     } else {
         return '';
+    }
+    if (Number.isNaN(dateObj.getTime())) return '';
+
+    if (useIstCalendar) {
+        const parts = new Intl.DateTimeFormat('en-GB', {
+            timeZone: APP_TIMEZONE,
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric'
+        }).formatToParts(dateObj);
+        const day = parts.find(p => p.type === 'day')?.value || '';
+        const month = parts.find(p => p.type === 'month')?.value || '';
+        const year = parts.find(p => p.type === 'year')?.value || '';
+        return `${day}-${month}-${year}`;
     }
 
     const day = String(dateObj.getDate()).padStart(2, '0');
@@ -528,6 +577,178 @@ function debounce(fn, delay = 300) {
         clearTimeout(timeoutId);
         timeoutId = setTimeout(() => fn.apply(this, args), delay);
     };
+}
+
+function plainTextFromHtml(html) {
+    if (!html) return '';
+    const d = document.createElement('div');
+    d.innerHTML = html;
+    return (d.textContent || d.innerText || '').trim();
+}
+
+/** Header global search: jump to tab + open item (tasks, notes, etc.). */
+function globalSearchNavigate(kind, id) {
+    const panel = document.getElementById('globalSearchResults');
+    const inp = document.getElementById('globalSearchInput');
+    if (panel) {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+    }
+    if (inp) inp.value = '';
+    if (kind === 'version') {
+        const v = typeof APP_VERSION !== 'undefined' ? APP_VERSION : '';
+        alert(`Task Management System — v${v}`);
+        return;
+    }
+    const n = parseInt(String(id), 10);
+    if (Number.isNaN(n)) return;
+    try {
+        switch (kind) {
+            case 'task':
+                switchTab('interactive', null);
+                setTimeout(() => openInteractiveTaskPopup(n), 60);
+                break;
+            case 'note':
+                switchTab('notes', null);
+                setTimeout(() => expandNote(n), 60);
+                break;
+            case 'learning':
+                switchTab('learningNotes', null);
+                setTimeout(() => openLearningNoteModal(n), 60);
+                break;
+            case 'milestone':
+                switchTab('milestones', null);
+                setTimeout(() => openMilestoneViewModal(n), 60);
+                break;
+            case 'location':
+                switchTab('locations', null);
+                break;
+            case 'snippet':
+                switchTab('snippets', null);
+                setTimeout(() => openSnippetView(n), 60);
+                break;
+            case 'user':
+                switchTab(currentUser && currentUser.role === 'admin' ? 'settings' : 'tasks', null);
+                break;
+            default:
+                break;
+        }
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+function runGlobalSearch(query) {
+    const box = document.getElementById('globalSearchResults');
+    const inp = document.getElementById('globalSearchInput');
+    if (!box || !currentUser) {
+        if (box) box.style.display = 'none';
+        return;
+    }
+    const q = (query != null ? query : (inp && inp.value) || '').trim().toLowerCase();
+    if (q.length < 2) {
+        box.innerHTML = '';
+        box.style.display = 'none';
+        return;
+    }
+    const data = getData();
+    const results = [];
+    const add = (kind, id, title, sub) => {
+        results.push({ kind, id, title: title || '(untitled)', sub: sub || '' });
+    };
+
+    for (const t of data.tasks || []) {
+        if (t.removed_at) continue;
+        const vis =
+            t.assigned_to === currentUser.id ||
+            (t.is_team_task && currentUser.role === 'admin') ||
+            currentUser.role === 'admin';
+        if (!vis) continue;
+        const num = t.task_number != null ? String(t.task_number) : '';
+        const hay = `${t.task_name || ''} ${t.description || ''} ${num}`.toLowerCase();
+        if (hay.includes(q)) add('task', t.id, t.task_name || 'Task', `Task #${num || '—'}`);
+    }
+
+    for (const n of filterItemsByCreatedBy(data.notes || [])) {
+        const hay = `${n.title || ''} ${plainTextFromHtml(n.content || '')}`.toLowerCase();
+        if (hay.includes(q)) add('note', n.id, n.title || 'Note', 'Note');
+    }
+    for (const n of filterItemsByCreatedBy(data.learningNotes || [])) {
+        const hay = `${n.course_name || ''} ${n.topic_name || ''} ${n.detailed_notes || ''} ${(n.tags || []).join(' ')}`.toLowerCase();
+        if (hay.includes(q)) {
+            add('learning', n.id, `${n.course_name || ''} — ${n.topic_name || ''}`.trim() || 'Learning note', 'Learning');
+        }
+    }
+    for (const m of filterItemsByCreatedBy(data.milestones || [])) {
+        const hay = `${m.title || ''} ${m.description || ''} ${m.comment || ''}`.toLowerCase();
+        if (hay.includes(q)) add('milestone', m.id, m.title || 'Milestone', 'Milestone');
+    }
+    for (const l of data.locations || []) {
+        const hay = `${l.name || ''}`.toLowerCase();
+        if (hay.includes(q)) add('location', l.id, l.name || 'Location', 'Location');
+    }
+    for (const s of filterItemsByCreatedBy(data.codeSnippets || [])) {
+        const hay = `${s.title || ''} ${s.code || ''} ${s.language || ''}`.toLowerCase();
+        if (hay.includes(q)) add('snippet', s.id, s.title || 'Snippet', 'Code snippet');
+    }
+    for (const u of usersVisibleInPickers()) {
+        const hay = `${u.name || ''} ${u.email || ''}`.toLowerCase();
+        if (hay.includes(q)) add('user', u.id, u.name || u.email || 'User', u.email || '');
+    }
+
+    const appVer = typeof APP_VERSION !== 'undefined' ? APP_VERSION : '';
+    if (
+        appVer &&
+        (`v${appVer}`.toLowerCase().includes(q) ||
+            appVer.toLowerCase().includes(q) ||
+            (q.length >= 3 && 'version'.indexOf(q) === 0))
+    ) {
+        add('version', 0, `App version v${appVer}`, 'About this app');
+    }
+
+    const max = 25;
+    const slice = results.slice(0, max);
+    if (slice.length === 0) {
+        box.innerHTML = '<div style="padding:12px;color:#888;font-size:13px;">No matches</div>';
+        box.style.display = 'block';
+        return;
+    }
+    box.innerHTML =
+        slice
+            .map(
+                r => `<button type="button" class="global-search-item" style="display:block;width:100%;text-align:left;padding:10px 12px;border:none;background:transparent;cursor:pointer;border-bottom:1px solid #eee;font-size:13px;"
+            onclick="globalSearchNavigate('${r.kind}',${r.id})">
+            <div style="font-weight:600;color:#333;">${escapeHtml(r.title)}</div>
+            <div style="font-size:11px;color:#888;margin-top:2px;">${escapeHtml(r.sub)}</div>
+        </button>`
+            )
+            .join('') +
+        (results.length > max ? `<div style="padding:8px 12px;font-size:11px;color:#999;">Showing ${max} of ${results.length}</div>` : '');
+    box.style.display = 'block';
+}
+
+const debouncedGlobalSearch = debounce(() => runGlobalSearch(), 280);
+
+function wireGlobalSearch() {
+    const inp = document.getElementById('globalSearchInput');
+    if (!inp || inp.getAttribute('data-wired-search') === '1') return;
+    inp.setAttribute('data-wired-search', '1');
+    inp.addEventListener('input', () => debouncedGlobalSearch());
+    inp.addEventListener('focus', () => {
+        if (inp.value.trim().length >= 2) runGlobalSearch();
+    });
+    document.addEventListener('click', (e) => {
+        const box = document.getElementById('globalSearchResults');
+        if (!box || box.style.display === 'none') return;
+        if (e.target === inp || inp.contains(e.target) || box.contains(e.target)) return;
+        box.style.display = 'none';
+    });
+    inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const box = document.getElementById('globalSearchResults');
+            if (box) box.style.display = 'none';
+        }
+    });
 }
 
 // IndexedDB for location attachments (avoids localStorage 5MB limit and allows more/larger files)
@@ -768,6 +989,7 @@ function init() {
     renderSettings();
     renderInteractiveDashboard();
     updateLoginScreenCopy();
+    wireGlobalSearch();
 }
 
 // Data Management
@@ -844,7 +1066,8 @@ function loadData() {
             milestones: [],
             dailyPlanner: [],
             codeSnippets: [],
-            journal: {}
+            journal: {},
+            reportToOptions: []
         };
         saveData(defaultData);
         return defaultData;
@@ -866,7 +1089,8 @@ function normalizeData(data) {
             milestones: [],
             dailyPlanner: [],
             codeSnippets: [],
-            journal: {}
+            journal: {},
+            reportToOptions: []
         };
     }
 
@@ -891,7 +1115,8 @@ function normalizeData(data) {
         dailyPlanner: Array.isArray(data.dailyPlanner) ? data.dailyPlanner : [],
         locationItems: Array.isArray(data.locationItems) ? data.locationItems : [],
         codeSnippets: Array.isArray(data.codeSnippets) ? data.codeSnippets : [],
-        journal: data.journal && typeof data.journal === 'object' ? data.journal : {}
+        journal: data.journal && typeof data.journal === 'object' ? data.journal : {},
+        reportToOptions: Array.isArray(data.reportToOptions) ? data.reportToOptions : []
     };
 }
 
@@ -1247,6 +1472,18 @@ function wireLoginScreenControls() {
     if (forgotReset) forgotReset.addEventListener('click', () => void submitForgotReset());
     const forgotBack = document.getElementById('forgotBackBtn');
     if (forgotBack) forgotBack.addEventListener('click', () => closeLoginForgotPanel());
+
+    const onLoginFieldKey = (e) => {
+        if (e.key !== 'Enter') return;
+        const modalMode = modal.getAttribute('data-login-mode') || 'signin';
+        if (modalMode !== 'signin') return;
+        e.preventDefault();
+        submitLoginPanel();
+    };
+    const loginEmail = document.getElementById('loginEmail');
+    const loginPassword = document.getElementById('loginPassword');
+    if (loginEmail) loginEmail.addEventListener('keydown', onLoginFieldKey);
+    if (loginPassword) loginPassword.addEventListener('keydown', onLoginFieldKey);
 }
 
 function updateLoginRegistrationFieldsVisibility() {
@@ -1303,6 +1540,12 @@ async function login() {
     }
 
     if (isApiMode()) {
+        const loginProg = document.getElementById('loginProgress');
+        const showLoginProgress = (on) => {
+            if (loginProg) loginProg.style.display = on ? 'block' : 'none';
+        };
+        showLoginProgress(true);
+        try {
         let res;
         try {
             res = await apiFetch('/api/auth/login', {
@@ -1395,6 +1638,9 @@ async function login() {
             console.error('init after login:', initErr);
         }
         return;
+        } finally {
+            showLoginProgress(false);
+        }
     }
 
     const data = getData();
@@ -1738,8 +1984,12 @@ function applyFeatureTabVisibility() {
     const feats = currentUserFeatures();
     const locBtn = document.getElementById('navTabLocations');
     const snipBtn = document.getElementById('navTabSnippets');
+    const intelBtn = document.getElementById('navTabIntelligence');
+    const tplBtn = document.getElementById('navTabTemplates');
     if (locBtn) locBtn.style.display = feats.includes('locations') ? '' : 'none';
     if (snipBtn) snipBtn.style.display = feats.includes('codeSnippets') ? '' : 'none';
+    if (intelBtn) intelBtn.style.display = feats.includes('intelligenceLayer') ? '' : 'none';
+    if (tplBtn) tplBtn.style.display = feats.includes('templateLibrary') ? '' : 'none';
 }
 
 // Tab Navigation
@@ -1751,6 +2001,8 @@ function switchTab(tabName, eventElement, skipAutoRender = false) {
     const feats = currentUserFeatures();
     if (tabName === 'locations' && !feats.includes('locations')) return;
     if (tabName === 'snippets' && !feats.includes('codeSnippets')) return;
+    if (tabName === 'intelligence' && !feats.includes('intelligenceLayer')) return;
+    if (tabName === 'templates' && !feats.includes('templateLibrary')) return;
 
     document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
@@ -1785,7 +2037,17 @@ function switchTab(tabName, eventElement, skipAutoRender = false) {
         if (tabName === 'journal') renderJournal();
         if (tabName === 'settings') renderSettings();
         if (tabName === 'recurringReport') renderRecurringReport();
+        if (tabName === 'intelligence') renderIntelligenceTab();
+        if (tabName === 'templates') renderTemplateTab();
     }
+}
+
+function renderIntelligenceTab() {
+    /* Static KPI layout in index.html; hook for future metrics. */
+}
+
+function renderTemplateTab() {
+    /* Static templates in index.html. */
 }
 
 // Dashboard
@@ -1923,9 +2185,13 @@ function renderDashboard() {
             }
         }
 
-        // Count tasks pending admin review (completed by user but not finalized by admin)
-        if (currentUser.role === 'admin' && task.task_action === 'completed' && !task.admin_finalized) {
-            adminReview++;
+        // Count tasks pending admin review (completed by user but not finalized by admin, or Not Done awaiting approval)
+        if (currentUser.role === 'admin') {
+            if (task.task_action === 'completed' && !task.admin_finalized) {
+                adminReview++;
+            } else if (task.task_action === 'not_done' && task.not_done_pending_admin) {
+                adminReview++;
+            }
         }
 
         // Exclude tasks without due date from date-based calculations
@@ -4105,7 +4371,7 @@ function removeTaskWithoutCompletion(taskId) {
 
 // Mark task as Not Done (closes current occurrence but keeps future recurring instances)
 function markTaskNotDone(taskId) {
-    if (!confirm('Mark this task as Not Done?\n\nThis will close the current occurrence but will not stop future recurring instances.')) {
+    if (!confirm('Mark this task as Not Done?\n\nOnly this occurrence is affected. Future recurring instances are unchanged. If this task was assigned to you by an admin, it will be sent for admin approval.')) {
         return;
     }
 
@@ -4125,6 +4391,16 @@ function markTaskNotDone(taskId) {
             // Ensure it's not treated as removed
             task.removed_at = null;
             task.removed_by = null;
+            const assignedByOther =
+                currentUser &&
+                task.created_by != null &&
+                Number(task.created_by) !== Number(currentUser.id);
+            if (currentUser && currentUser.role === 'user' && assignedByOther) {
+                task.not_done_pending_admin = true;
+                task.not_done_marked_at = new Date().toISOString();
+            } else {
+                task.not_done_pending_admin = false;
+            }
         }
     });
 
@@ -4136,6 +4412,46 @@ function markTaskNotDone(taskId) {
     if (drilldownContext) {
         renderDrilldown();
     }
+    if (isApiMode() && currentUser && !currentUser.isMaster) {
+        void flushWorkspaceToApiNow();
+    }
+}
+
+function approveNotDoneByAdmin(taskId) {
+    if (currentUser.role !== 'admin') return;
+    updateData(data => {
+        const task = data.tasks.find(t => t.id == taskId);
+        if (task) {
+            task.not_done_pending_admin = false;
+            task.not_done_approved_at = new Date().toISOString();
+            task.not_done_approved_by = currentUser.id;
+        }
+    });
+    closeInteractiveTaskPopup();
+    renderTasks();
+    renderDashboard();
+    renderInteractiveDashboard();
+    if (isApiMode()) void flushWorkspaceToApiNow();
+}
+
+function reopenTaskFromNotDone(taskId) {
+    if (currentUser.role !== 'admin') return;
+    const note = prompt('Reopen task (clear Not Done). Optional note for assignee:');
+    if (note === null) return;
+    updateData(data => {
+        const task = data.tasks.find(t => t.id == taskId);
+        if (task) {
+            task.task_action = 'not_completed';
+            task.not_done_pending_admin = false;
+            task.comment = note && note.trim() ? note.trim() : null;
+        }
+    });
+    closeInteractiveTaskPopup();
+    processRecurringTasks();
+    renderTasks();
+    renderDashboard();
+    renderInteractiveDashboard();
+    if (isApiMode()) void flushWorkspaceToApiNow();
 }
 
 // Stop generating future recurring instances (after today)
@@ -4243,7 +4559,9 @@ function filterTasksByAdminReview() {
     }
 
     const reviewTasks = data.tasks.filter(task => {
-        if (!isTaskCompleted(task) || task.admin_finalized) return false;
+        const pendingCompletion = isTaskCompleted(task) && !task.admin_finalized;
+        const pendingNotDone = task.task_action === 'not_done' && task.not_done_pending_admin;
+        if (!pendingCompletion && !pendingNotDone) return false;
 
         if (fromDate && toDate) {
             const dueDate = task.due_date || task.next_due_date;
@@ -4327,6 +4645,12 @@ function openTaskModal(taskId = null) {
         pickUsers.map(u =>
             `<option value="${u.id}">${escapeHtml(u.name)}</option>`
         ).join('');
+
+    const reportSel = document.getElementById('taskReportTo');
+    const existingForRt = taskId ? data.tasks.find(t => t.id == taskId) : null;
+    if (reportSel) {
+        populateReportToSelect(reportSel, existingForRt && existingForRt.report_to_id ? existingForRt.report_to_id : '');
+    }
 
     // Populate locations
     const locationSelect = document.getElementById('taskLocation');
@@ -4560,6 +4884,10 @@ function saveTask(event) {
         segregation_type_id: document.getElementById('taskSegregation').value ? parseInt(document.getElementById('taskSegregation').value) : null,
         est_minutes: document.getElementById('taskEstMinutes').value ? parseInt(document.getElementById('taskEstMinutes').value) : null,
         is_team_task: document.getElementById('taskIsTeam').checked,
+        report_to_id: (() => {
+            const el = document.getElementById('taskReportTo');
+            return el && el.value ? String(el.value) : null;
+        })(),
         task_action: 'not_completed',
         comment: null,
         recurrence_stopped: stopRecurrence,
@@ -4648,6 +4976,7 @@ function openQuickTaskModal() {
 
     // Set default due date to today (use formatDateString for consistency)
     document.getElementById('quickTaskDueDate').value = formatDateString(new Date());
+    populateReportToSelect(document.getElementById('quickTaskReportTo'), '');
 
     // Focus on task name field
     setTimeout(() => {
@@ -4708,9 +5037,35 @@ function openInteractiveTaskPopup(taskId) {
         statusText = 'No Due Date';
     }
 
-    // Build action buttons (Need Improvement = Done, so they get completed-style actions)
+    // Build action buttons
     let actionsHtml = '';
-    if (!isTaskCompleted(task) && !task.removed_at) {
+    if (task.task_action === 'not_done') {
+        if (task.not_done_pending_admin && currentUser.role === 'user' && Number(task.assigned_to) === Number(currentUser.id)) {
+            actionsHtml = `
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
+                <p style="color:#555;font-size:14px;">Marked <strong>Not Done</strong>. <strong>Awaiting admin approval.</strong></p>
+                <button class="btn btn-primary" onclick="event.stopPropagation(); editTask(${task.id}); closeInteractiveTaskPopup();" style="margin-top:10px;padding:10px 20px;">Edit Task</button>
+            </div>`;
+        } else if (task.not_done_pending_admin && currentUser.role === 'admin') {
+            actionsHtml = `
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
+                <h3 style="margin-bottom: 15px; color: #333;">Admin — Not Done review</h3>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn btn-success" onclick="event.stopPropagation(); approveNotDoneByAdmin(${task.id});" style="padding: 10px 20px;">Approve Not Done</button>
+                    <button class="btn btn-warning" onclick="event.stopPropagation(); reopenTaskFromNotDone(${task.id});" style="padding: 10px 20px;">Reopen task</button>
+                    <button class="btn btn-primary" onclick="event.stopPropagation(); editTask(${task.id}); closeInteractiveTaskPopup();" style="padding: 10px 20px;">Edit Task</button>
+                </div>
+            </div>`;
+        } else {
+            actionsHtml = `
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
+                <button class="btn btn-primary" onclick="event.stopPropagation(); editTask(${task.id}); closeInteractiveTaskPopup();" style="padding: 10px 20px;">Edit Task</button>
+                ${currentUser.role === 'admin' ? `
+                    <button class="btn btn-info" onclick="event.stopPropagation(); copyTask(${task.id}); closeInteractiveTaskPopup();" style="padding: 10px 20px;">Copy Task</button>
+                    <button class="btn btn-danger" onclick="event.stopPropagation(); deleteTask(${task.id}); closeInteractiveTaskPopup(); renderInteractiveDashboard();" style="padding: 10px 20px;">Delete Task</button>` : ''}
+            </div>`;
+        }
+    } else if (!isTaskCompleted(task) && !task.removed_at) {
         actionsHtml = `
             <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
                 <h3 style="margin-bottom: 15px; color: #333;">Actions</h3>
@@ -4814,6 +5169,11 @@ function openInteractiveTaskPopup(taskId) {
                     <strong style="color: #333;">Location:</strong>
                     <div style="color: #666;">${location ? location.name : 'Unknown'}</div>
                 </div>
+                ${task.report_to_id ? `
+                <div>
+                    <strong style="color: #333;">Report To:</strong>
+                    <div style="color: #666;">${escapeHtml(reportToLabelForId(task.report_to_id) || String(task.report_to_id))}</div>
+                </div>` : ''}
                 <div>
                     <strong style="color: #333;">Due Date:</strong>
                     <div style="color: #666;">${dueDateStr}</div>
@@ -4955,7 +5315,11 @@ function saveQuickTask(event) {
             recurrence_stopped: false,
             created_by: currentUser.id,
             created_at: new Date().toISOString(),
-            completed_at: null
+            completed_at: null,
+            report_to_id: (() => {
+                const el = document.getElementById('quickTaskReportTo');
+                return el && el.value ? String(el.value) : null;
+            })()
         };
         data.tasks.push(task);
     });
@@ -5410,7 +5774,11 @@ function renderRecurringReport() {
 
     const monthHeaders = months.map(({ year, monthIndex }) => {
         const d = new Date(year, monthIndex, 1);
-        const label = d.toLocaleString(undefined, { month: 'short', year: 'numeric' });
+        const label = new Intl.DateTimeFormat('en-IN', {
+            timeZone: APP_TIMEZONE,
+            month: 'short',
+            year: 'numeric'
+        }).format(d);
         return `<th style="white-space: nowrap;">${label}</th>`;
     }).join('');
 
@@ -5836,6 +6204,10 @@ function copyTask(taskId) {
     document.getElementById('taskSegregation').value = task.segregation_type_id || '';
     document.getElementById('taskEstMinutes').value = task.est_minutes || '';
     document.getElementById('taskIsTeam').checked = task.is_team_task || false;
+    const tr = document.getElementById('taskReportTo');
+    if (tr) {
+        populateReportToSelect(tr, task.report_to_id || '');
+    }
     document.getElementById('taskCommentGroup').style.display = 'none';
     document.getElementById('taskStopRecurrence').checked = false;
     document.getElementById('taskRecurrenceStopped').value = 'false';
@@ -6347,6 +6719,11 @@ function renderSettings() {
                     <textarea id="masterRegBlockedDomains" class="form-control" rows="2" placeholder="competitor.com"></textarea>
                 </div>
                 <div class="form-group">
+                    <label>Report to — dropdown options (one per line)</label>
+                    <p style="color:#666;font-size:12px;margin:0 0 6px;">Shown on tasks (Report to). Append <code>|disabled</code> to hide from dropdown without deleting.</p>
+                    <textarea id="masterReportToOptionsRaw" class="form-control" rows="5" placeholder="CFO&#10;Finance Lead|disabled"></textarea>
+                </div>
+                <div class="form-group">
                     <label for="masterSessionIdleMinutes">Session idle timeout (minutes)</label>
                     <input type="number" id="masterSessionIdleMinutes" class="form-control" min="0" max="10080" step="1" style="max-width:140px;">
                     <p style="color:#666;font-size:12px;margin-top:4px;">0 = disabled. The server signs users out after this many minutes without API activity (JWT may still be unexpired).</p>
@@ -6401,6 +6778,8 @@ function renderSettings() {
                     <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-top:6px;">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="masterFeatureLocations"> Locations tab</label>
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="masterFeatureCodeSnippets"> Code Snippets tab</label>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="masterFeatureIntelligence"> Intelligence tab</label>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="masterFeatureTemplates"> Template Library tab</label>
                         <button type="button" class="btn btn-primary" style="padding:4px 14px;font-size:13px;" onclick="masterApiSaveFeatures()">Save features</button>
                     </div>
                     <p style="color:#666;font-size:12px;margin-top:4px;">These tabs are hidden by default. Check the boxes to enable for the selected user.</p>
@@ -6711,6 +7090,10 @@ async function masterRegistrationPolicyHydrate() {
         if (bd && Array.isArray(p.blockedDomains)) bd.value = p.blockedDomains.join('\n');
         const idleEl = document.getElementById('masterSessionIdleMinutes');
         if (idleEl) idleEl.value = p.sessionIdleTimeoutMinutes != null ? String(p.sessionIdleTimeoutMinutes) : '0';
+        const rtRaw = document.getElementById('masterReportToOptionsRaw');
+        if (rtRaw && Array.isArray(p.reportToOptions)) {
+            rtRaw.value = p.reportToOptions.map(o => (o.disabled ? `${o.label}|disabled` : o.label)).join('\n');
+        }
     } catch (e) {
         console.error(e);
     }
@@ -6729,7 +7112,7 @@ async function masterLoadApprovalRequests() {
             return;
         }
         wrap.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr style="text-align:left;border-bottom:1px solid #ddd;"><th style="padding:6px 10px;">Name</th><th style="padding:6px 10px;">Email</th><th style="padding:6px 10px;">Requested</th><th style="padding:6px 10px;">Action</th></tr></thead><tbody>'
-            + list.map(r => `<tr><td style="padding:6px 10px;">${escapeHtml(r.name)}</td><td style="padding:6px 10px;">${escapeHtml(r.email)}</td><td style="padding:6px 10px;font-size:12px;">${new Date(r.requestedAt).toLocaleString()}</td><td style="padding:6px 10px;"><button class="btn btn-success" style="padding:3px 10px;font-size:12px;margin-right:4px;" onclick="masterApproveRequest('${r.id}')">Approve</button><button class="btn btn-danger" style="padding:3px 10px;font-size:12px;" onclick="masterRejectRequest('${r.id}')">Reject</button></td></tr>`).join('')
+            + list.map(r => `<tr><td style="padding:6px 10px;">${escapeHtml(r.name)}</td><td style="padding:6px 10px;">${escapeHtml(r.email)}</td><td style="padding:6px 10px;font-size:12px;">${formatDateTimeIST(r.requestedAt)}</td><td style="padding:6px 10px;"><button class="btn btn-success" style="padding:3px 10px;font-size:12px;margin-right:4px;" onclick="masterApproveRequest('${r.id}')">Approve</button><button class="btn btn-danger" style="padding:3px 10px;font-size:12px;" onclick="masterRejectRequest('${r.id}')">Reject</button></td></tr>`).join('')
             + '</tbody></table>';
     } catch (e) {
         console.error(e);
@@ -6772,6 +7155,21 @@ async function saveMasterRegistrationPolicy() {
     const idleEl = document.getElementById('masterSessionIdleMinutes');
     let sessionIdleTimeoutMinutes = idleEl ? parseInt(idleEl.value, 10) : 0;
     if (Number.isNaN(sessionIdleTimeoutMinutes) || sessionIdleTimeoutMinutes < 0) sessionIdleTimeoutMinutes = 0;
+    const reportToOptions = (function parseRt() {
+        const rawRt = (document.getElementById('masterReportToOptionsRaw') && document.getElementById('masterReportToOptionsRaw').value) || '';
+        const out = [];
+        rawRt.split('\n').forEach((line, i) => {
+            const t = line.trim();
+            if (!t) return;
+            const disabled = /\|\s*disabled\s*$/i.test(t) || /\|\s*1\s*$/.test(t);
+            const label = t.replace(/\|\s*disabled\s*$/i, '').replace(/\|\s*1\s*$/, '').trim();
+            if (!label) return;
+            const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 64);
+            const id = slug || `rt_${i}`;
+            out.push({ id, label, disabled });
+        });
+        return out;
+    })();
     try {
         const res = await apiFetch('/api/master/registration-policy', {
             method: 'PUT',
@@ -6782,6 +7180,7 @@ async function saveMasterRegistrationPolicy() {
                 blockedEmails,
                 blockedDomains,
                 sessionIdleTimeoutMinutes,
+                reportToOptions,
             }),
         });
         if (!res.ok) {
@@ -6991,8 +7390,12 @@ function masterHydrateFeatureCheckboxes() {
     const uid = sel ? parseInt(sel.value, 10) : NaN;
     const locCb = document.getElementById('masterFeatureLocations');
     const snipCb = document.getElementById('masterFeatureCodeSnippets');
+    const intCb = document.getElementById('masterFeatureIntelligence');
+    const tplCb = document.getElementById('masterFeatureTemplates');
     if (locCb) locCb.checked = false;
     if (snipCb) snipCb.checked = false;
+    if (intCb) intCb.checked = false;
+    if (tplCb) tplCb.checked = false;
 
     const shareWrap = document.getElementById('masterShareAdminCheckboxes');
     if (shareWrap) shareWrap.innerHTML = '<span style="color:#999;font-size:13px;">Select a user above to see sharing options</span>';
@@ -7004,6 +7407,8 @@ function masterHydrateFeatureCheckboxes() {
     const feats = (user && Array.isArray(user.enabledFeatures)) ? user.enabledFeatures : [];
     if (locCb) locCb.checked = feats.includes('locations');
     if (snipCb) snipCb.checked = feats.includes('codeSnippets');
+    if (intCb) intCb.checked = feats.includes('intelligenceLayer');
+    if (tplCb) tplCb.checked = feats.includes('templateLibrary');
 
     if (shareWrap) {
         const userTenantRoot = user ? Number(user.tenantRootUserId || user.tenant_admin_root_id || 0) : 0;
@@ -7035,6 +7440,8 @@ async function masterApiSaveFeatures() {
     const feats = [];
     if (document.getElementById('masterFeatureLocations') && document.getElementById('masterFeatureLocations').checked) feats.push('locations');
     if (document.getElementById('masterFeatureCodeSnippets') && document.getElementById('masterFeatureCodeSnippets').checked) feats.push('codeSnippets');
+    if (document.getElementById('masterFeatureIntelligence') && document.getElementById('masterFeatureIntelligence').checked) feats.push('intelligenceLayer');
+    if (document.getElementById('masterFeatureTemplates') && document.getElementById('masterFeatureTemplates').checked) feats.push('templateLibrary');
     try {
         const res = await apiFetch(`/api/master/users/${uid}/features`, {
             method: 'PATCH',
@@ -7349,10 +7756,12 @@ function renderInteractiveDashboard() {
     const userSelect = document.getElementById('filterDashboardUser');
     const locationSelect = document.getElementById('filterDashboardLocation');
     const statusSelect = document.getElementById('filterDashboardStatus');
+    const reportToSelect = document.getElementById('filterDashboardReportTo');
 
     // Store current selections before repopulating
     const currentUserValue = userSelect ? userSelect.value : '';
     const currentStatusValue = statusSelect ? statusSelect.value : '';
+    const currentReportToValue = reportToSelect ? reportToSelect.value : '';
 
     // Check if this is the first time loading (no options exist yet or only "All Users" option)
     const isFirstLoad = !userSelect || userSelect.options.length <= 1;
@@ -7388,6 +7797,23 @@ function renderInteractiveDashboard() {
             `<option value="${l.id}">${l.name}</option>`
         ).join('');
 
+    if (reportToSelect) {
+        const rtOpts = getReportToOptionsActive();
+        reportToSelect.innerHTML =
+            '<option value="">All Report To</option>' +
+            rtOpts
+                .map(o => {
+                    const id = String(o.id).replace(/"/g, '&quot;');
+                    return `<option value="${id}">${escapeHtml(o.label)}</option>`;
+                })
+                .join('');
+        if (currentReportToValue && [...reportToSelect.options].some(o => o.value === currentReportToValue)) {
+            reportToSelect.value = currentReportToValue;
+        } else {
+            reportToSelect.value = '';
+        }
+    }
+
     // Get filter values
     const monthFromValue = document.getElementById('filterDashboardMonthFrom')?.value;
     const monthToValue = document.getElementById('filterDashboardMonthTo')?.value;
@@ -7397,6 +7823,9 @@ function renderInteractiveDashboard() {
     const statusFilter = document.getElementById('filterDashboardStatus').value;
     const locationFilter = document.getElementById('filterDashboardLocation').value;
     const priorityFilter = document.getElementById('filterDashboardPriority').value;
+    const reportToFilter = document.getElementById('filterDashboardReportTo')
+        ? document.getElementById('filterDashboardReportTo').value
+        : '';
 
     // Parse from/to month range
     let fromDateRange = null;
@@ -7435,6 +7864,9 @@ function renderInteractiveDashboard() {
 
         // Location filter
         if (locationFilter && task.location_id !== parseInt(locationFilter)) return false;
+
+        // Report To filter
+        if (reportToFilter && String(task.report_to_id || '') !== String(reportToFilter)) return false;
 
         // Priority filter
         if (priorityFilter && task.priority !== priorityFilter) return false;
@@ -7520,6 +7952,7 @@ function renderInteractiveDashboard() {
                             <th style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">Task Name</th>
                             <th style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">Status</th>
                             <th style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">Assigned To</th>
+                            <th style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">Report To</th>
                             <th style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">Location</th>
                             <th style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">Due Date</th>
                             <th style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600;">Expected Completion</th>
@@ -7565,6 +7998,7 @@ function exportInteractiveDashboardCSV() {
         'Task Name',
         'Description',
         'Assigned to (Name)',
+        'Report To',
         'Location',
         'Task Type',
         'Frequency',
@@ -7630,6 +8064,7 @@ function exportInteractiveDashboardCSV() {
             task.task_name || '',
             task.description || '',
             user ? user.name : '',
+            task.report_to_id ? (reportToLabelForId(task.report_to_id) || String(task.report_to_id)) : '',
             location ? location.name : '',
             task.task_type || '',
             task.frequency || '',
@@ -7849,6 +8284,7 @@ function renderInteractiveTaskCard(task) {
 
     const dueDateStr = dueDate ? formatDateDisplay(dueDate) : 'Not set';
     const expectedStr = task.expected_completion_date ? formatDateDisplay(task.expected_completion_date) : '—';
+    const reportToStr = task.report_to_id ? (reportToLabelForId(task.report_to_id) || '—') : '—';
 
     return `
         <tr style="border-bottom: 1px solid #e0e0e0; transition: background 0.2s; cursor: pointer;" 
@@ -7868,6 +8304,9 @@ function renderInteractiveTaskCard(task) {
             </td>
             <td style="padding: 15px; color: #666; font-size: 14px;">
                 ${assignedUser ? assignedUser.name : 'Unknown'}
+            </td>
+            <td style="padding: 15px; color: #666; font-size: 14px;">
+                ${escapeHtml(reportToStr)}
             </td>
             <td style="padding: 15px; color: #666; font-size: 14px;">
                 ${location ? location.name : 'Unknown'}
@@ -9047,6 +9486,9 @@ function deleteNote(noteId) {
     });
 
     renderNotes();
+    if (isApiMode() && currentUser && !currentUser.isMaster) {
+        void flushWorkspaceToApiNow();
+    }
 }
 
 function toggleNotesVisibility() {
@@ -9159,8 +9601,7 @@ function renderNotes() {
     }
 
     container.innerHTML = notes.map(note => {
-        const date = new Date(note.updated_at || note.created_at);
-        const dateStr = date.toLocaleDateString();
+        const dateStr = formatDateTimeIST(note.updated_at || note.created_at);
         const title = note.title || 'Untitled Note';
         const category = note.category || '';
         const categoryBadge = category ?
@@ -9233,8 +9674,7 @@ function expandNote(noteId) {
 
     const title = note.title || 'Untitled Note';
     const category = note.category || 'No Category';
-    const date = new Date(note.updated_at || note.created_at);
-    const dateStr = date.toLocaleString();
+    const dateStr = formatDateTimeIST(note.updated_at || note.created_at);
 
     // Create modal overlay
     const overlay = document.createElement('div');
@@ -9875,6 +10315,9 @@ function deleteMilestone(milestoneId) {
     });
 
     renderMilestones();
+    if (isApiMode() && currentUser && !currentUser.isMaster) {
+        void flushWorkspaceToApiNow();
+    }
 }
 
 function exportMilestonesCSV() {
@@ -10725,6 +11168,9 @@ function deleteSnippet(id) {
     renderCodeSnippets();
     const viewPanel = document.getElementById('snippetViewPanel');
     if (viewPanel) viewPanel.style.display = 'none';
+    if (isApiMode() && currentUser && !currentUser.isMaster) {
+        void flushWorkspaceToApiNow();
+    }
 }
 
 function copySnippet(id, ev) {
@@ -11358,6 +11804,9 @@ function deleteLearningNote(noteId) {
         data.learningNotes = (data.learningNotes || []).filter(n => n.id != noteId);
     });
     renderLearningNotes();
+    if (isApiMode() && currentUser && !currentUser.isMaster) {
+        void flushWorkspaceToApiNow();
+    }
 }
 
 function getFilteredLearningNotes() {
