@@ -33,7 +33,7 @@ const { getSiteSettings, sanitizeReportToOptions } = require('../services/regist
 
 const router = express.Router();
 
-const EXPORT_VERSION = '17.2.2';
+const EXPORT_VERSION = '17.2.3';
 
 function isLegacyFlatJournal(j) {
   if (!j || typeof j !== 'object' || Array.isArray(j)) return false;

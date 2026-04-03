@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.2';
+const APP_VERSION = '17.2.3';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -2497,6 +2497,7 @@ function templateAddRootItem(blockId) {
 }
 
 function templateRemoveItem(blockId, pathStr) {
+    if (!confirm('Remove this line? This cannot be undone.')) return;
     updateData(data => {
         const b = templateFindBlock(data, blockId);
         if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
@@ -2558,6 +2559,18 @@ function templateAddNewBlock() {
     renderTemplateTab();
 }
 
+/** Switch to Task Setup and open new-task modal */
+function templateAddQuickTask() {
+    switchTab('tasks', null);
+    setTimeout(() => {
+        try {
+            openTaskModal(null);
+        } catch (e) {
+            console.error(e);
+        }
+    }, 60);
+}
+
 function toggleTemplateCard(blockId) {
     const key = String(blockId);
     const safe = templateBlockDomSafe(blockId);
@@ -2616,9 +2629,7 @@ function renderTemplateTab() {
     const addBlockJs = 'templateAddNewBlock()';
     root.innerHTML = `
         <div style="max-width:900px;margin:0 auto;">
-            <h2 style="margin-bottom:8px;">Template Library</h2>
-            <p style="color:#666;margin-bottom:16px;">Editable checklists stored in your workspace. Expand a card to edit, or jump to Task Setup to create work items. All dates/times in the app follow <strong>IST (UTC+05:30)</strong>.</p>
-            <button type="button" class="btn btn-primary" style="margin-bottom:16px;" onclick="${addBlockJs}">Add template block</button>
+            <button type="button" class="btn btn-primary" style="margin-bottom:12px;padding:4px 12px;font-size:12px;" onclick="${addBlockJs}">Add template block</button>
             <div style="display:flex;flex-direction:column;gap:12px;">
                 ${blocks
                     .map((t, idx) => {
@@ -2640,13 +2651,13 @@ function renderTemplateTab() {
                         <label style="display:block;margin-bottom:10px;font-size:13px;color:#555;">Title
                             <input type="text" class="form-control" style="margin-top:4px;" value="${escapeHtml(t.title || '')}" onchange='templateSetBlockTitle(${bidJs}, this.value)' />
                         </label>
-                        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-                            <button type="button" class="btn btn-secondary" onclick='templateAddRootItem(${bidJs})'>Add item</button>
-                            <button type="button" class="btn btn-secondary" onclick='templateRemoveAllItems(${bidJs})'>Remove all items</button>
-                            <button type="button" class="btn btn-secondary" onclick='templateResetCheckboxes(${bidJs})'>Reset all checkboxes</button>
-                            <button type="button" class="btn btn-secondary" onclick='copyTemplateChecklist(${bidJs})'>Copy checklist</button>
-                            <button type="button" class="btn btn-primary" onclick="switchTab('tasks', null)">Open Task Setup</button>
-                            <button type="button" class="btn btn-danger" onclick='templateDeleteBlock(${bidJs})'>Delete block</button>
+                        <div style="display:flex;flex-wrap:nowrap;gap:6px;margin-bottom:12px;align-items:center;overflow-x:auto;-webkit-overflow-scrolling:touch;">
+                            <button type="button" class="btn btn-secondary" style="padding:3px 8px;font-size:11px;line-height:1.25;white-space:nowrap;flex-shrink:0;" onclick='templateAddRootItem(${bidJs})'>Add item</button>
+                            <button type="button" class="btn btn-secondary" style="padding:3px 8px;font-size:11px;line-height:1.25;white-space:nowrap;flex-shrink:0;" onclick='templateRemoveAllItems(${bidJs})'>Remove all items</button>
+                            <button type="button" class="btn btn-secondary" style="padding:3px 8px;font-size:11px;line-height:1.25;white-space:nowrap;flex-shrink:0;" onclick='templateResetCheckboxes(${bidJs})'>Reset checkboxes</button>
+                            <button type="button" class="btn btn-secondary" style="padding:3px 8px;font-size:11px;line-height:1.25;white-space:nowrap;flex-shrink:0;" onclick='copyTemplateChecklist(${bidJs})'>Copy checklist</button>
+                            <button type="button" class="btn btn-primary" style="padding:3px 8px;font-size:11px;line-height:1.25;white-space:nowrap;flex-shrink:0;" onclick="templateAddQuickTask()">Add quick task</button>
+                            <button type="button" class="btn btn-secondary" style="padding:3px 8px;font-size:11px;line-height:1.25;white-space:nowrap;flex-shrink:0;" onclick="switchTab('tasks', null)">Task Setup</button>
                         </div>
                         ${renderTemplateItemsHtml(t.items || [], bid, '')}
                     </div>
