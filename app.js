@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.1';
+const APP_VERSION = '17.2.2';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -2292,16 +2292,22 @@ const TEMPLATE_LIBRARY = [
     },
 ];
 
+/** Which template cards stay expanded across re-renders (editing items must not collapse the block). */
+const templateExpandedCardIds = new Set();
+
 function newTemplateEntityId() {
     return 'tpl_' + (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now() + '_' + Math.random().toString(36).slice(2, 11));
 }
 
 function normalizeTemplateItemNode(it) {
     const raw = it && typeof it === 'object' ? it : {};
+    const sev = raw.severity;
+    const severity = sev === 'R' || sev === 'G' || sev === 'Y' ? sev : '';
     return {
         id: raw.id != null ? String(raw.id) : newTemplateEntityId(),
         label: raw.label != null ? String(raw.label) : '',
         checked: !!raw.checked,
+        severity,
         children: Array.isArray(raw.children) ? raw.children.map(normalizeTemplateItemNode) : []
     };
 }
@@ -2365,17 +2371,32 @@ function walkTemplateItemsResetCheckboxes(items) {
     }
 }
 
+function templateSeverityColor(sev) {
+    if (sev === 'R') return '#c62828';
+    if (sev === 'G') return '#2e7d32';
+    if (sev === 'Y') return '#f57f17';
+    return '#333333';
+}
+
+/** Tab-separated rows for Excel: Level, Severity, Label, Done */
+function flattenTemplateItemsForExcelTsv(items, depth) {
+    const rows = [];
+    const walk = (arr, d) => {
+        if (!Array.isArray(arr)) return;
+        arr.forEach(it => {
+            const label = String(it.label != null ? it.label : '').replace(/\r?\n/g, ' ').replace(/\t/g, ' ');
+            const sev = it.severity === 'R' || it.severity === 'G' || it.severity === 'Y' ? it.severity : '';
+            const done = it.checked ? 'Yes' : 'No';
+            rows.push([d, sev, label, done].join('\t'));
+            if (it.children && it.children.length) walk(it.children, d + 1);
+        });
+    };
+    walk(items, depth || 0);
+    return rows;
+}
+
 function flattenTemplateItemsForCopy(items, depth) {
-    const lines = [];
-    const pad = '  '.repeat(depth || 0);
-    if (!Array.isArray(items)) return lines;
-    items.forEach((it, i) => {
-        lines.push(`${pad}${i + 1}. ${it.label || ''}`);
-        if (it.children && it.children.length) {
-            lines.push(...flattenTemplateItemsForCopy(it.children, (depth || 0) + 1));
-        }
-    });
-    return lines;
+    return flattenTemplateItemsForExcelTsv(items, depth || 0);
 }
 
 function templateBlockDomSafe(blockId) {
@@ -2389,24 +2410,31 @@ function templateFindBlock(data, blockId) {
 
 function renderTemplateItemsHtml(items, blockId, prefix) {
     if (!Array.isArray(items) || items.length === 0) {
-        return '<p style="color:#999;font-size:13px;margin:8px 0;">No items yet. Use “Add item”.</p>';
+        return '<p style="color:#999;font-size:13px;margin:8px 0;">No items yet. Use “Add item” (▲ adds a sub-line under this row).</p>';
     }
     const bidJs = JSON.stringify(blockId);
     return items
         .map((it, idx) => {
             const path = prefix === '' ? String(idx) : `${prefix}-${idx}`;
             const pathJs = JSON.stringify(path);
-            const margin = prefix ? 18 : 0;
+            const margin = prefix ? 16 : 0;
             const sub = renderTemplateItemsHtml(it.children || [], blockId, path);
+            const sev = it.severity === 'R' || it.severity === 'G' || it.severity === 'Y' ? it.severity : '';
+            const col = templateSeverityColor(sev);
+            const emptySevJs = JSON.stringify('');
             return `
-            <div style="margin-left:${margin}px;border-left:2px solid #e0e7ff;padding-left:10px;margin-bottom:10px;">
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                    <input type="checkbox" ${it.checked ? 'checked' : ''} onchange='templateItemSetChecked(${bidJs},${pathJs},this.checked)' />
-                    <input type="text" class="form-control" style="flex:1;min-width:180px;font-size:14px;" value="${escapeHtml(it.label)}" onchange='templateItemSetLabel(${bidJs},${pathJs},this.value)' />
-                </div>
-                <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
-                    <button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;" onclick='templateAddChildItem(${bidJs},${pathJs})'>Add sub-item</button>
-                    <button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;" onclick='templateRemoveItem(${bidJs},${pathJs})'>Remove</button>
+            <div class="template-item-row" style="margin-left:${margin}px;border-left:2px solid #e0e7ff;padding-left:8px;margin-bottom:8px;" onclick="event.stopPropagation();">
+                <div style="display:flex;align-items:center;gap:6px;min-height:36px;">
+                    <input type="checkbox" style="flex-shrink:0;" ${it.checked ? 'checked' : ''} onchange='templateItemSetChecked(${bidJs},${pathJs},this.checked)' onclick="event.stopPropagation();" />
+                    <input type="text" class="form-control" style="flex:1;min-width:100px;font-size:14px;color:${col};font-weight:${sev ? '600' : '400'};" value="${escapeHtml(it.label)}" onchange='templateItemSetLabel(${bidJs},${pathJs},this.value)' onclick="event.stopPropagation();" />
+                    <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;" onclick="event.stopPropagation();">
+                        <button type="button" title="Add sub-item (under this line)" style="padding:2px 7px;font-size:13px;line-height:1.2;border:1px solid #cfd8dc;border-radius:4px;background:#fafafa;cursor:pointer;" onclick='event.stopPropagation();templateAddChildItem(${bidJs},${pathJs})'>▲</button>
+                        <button type="button" title="Remove this line" style="padding:2px 7px;font-size:13px;line-height:1.2;border:1px solid #cfd8dc;border-radius:4px;background:#fafafa;cursor:pointer;" onclick='event.stopPropagation();templateRemoveItem(${bidJs},${pathJs})'>▼</button>
+                        <button type="button" title="Red — impact / severity" style="padding:2px 5px;font-size:11px;font-weight:700;color:#c62828;border:1px solid #ef9a9a;border-radius:3px;background:#fff;cursor:pointer;" onclick='event.stopPropagation();templateItemSetSeverity(${bidJs},${pathJs},"R")'>R</button>
+                        <button type="button" title="Green — impact / severity" style="padding:2px 5px;font-size:11px;font-weight:700;color:#2e7d32;border:1px solid #a5d6a7;border-radius:3px;background:#fff;cursor:pointer;" onclick='event.stopPropagation();templateItemSetSeverity(${bidJs},${pathJs},"G")'>G</button>
+                        <button type="button" title="Yellow — impact / severity" style="padding:2px 5px;font-size:11px;font-weight:700;color:#f57f17;border:1px solid #ffcc80;border-radius:3px;background:#fff;cursor:pointer;" onclick='event.stopPropagation();templateItemSetSeverity(${bidJs},${pathJs},"Y")'>Y</button>
+                        <button type="button" title="Default text color" style="padding:2px 5px;font-size:11px;color:#666;border:1px solid #e0e0e0;border-radius:3px;background:#fff;cursor:pointer;" onclick='event.stopPropagation();templateItemSetSeverity(${bidJs},${pathJs},${emptySevJs})'>×</button>
+                    </div>
                 </div>
                 ${sub}
             </div>`;
@@ -2430,6 +2458,17 @@ function templateItemSetLabel(blockId, pathStr, label) {
         if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
         const node = getTemplateItemNodeByPath(b.items, templatePathParts(pathStr));
         if (node) node.label = label;
+    });
+    renderTemplateTab();
+}
+
+function templateItemSetSeverity(blockId, pathStr, code) {
+    const c = code === 'R' || code === 'G' || code === 'Y' ? code : '';
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        const node = getTemplateItemNodeByPath(b.items, templatePathParts(pathStr));
+        if (node) node.severity = c;
     });
     renderTemplateTab();
 }
@@ -2488,6 +2527,7 @@ function templateResetCheckboxes(blockId) {
 
 function templateDeleteBlock(blockId) {
     if (!confirm('Delete this template block?')) return;
+    templateExpandedCardIds.delete(String(blockId));
     updateData(data => {
         if (!Array.isArray(data.templateBlocks)) return;
         data.templateBlocks = data.templateBlocks.filter(x => x.id !== blockId);
@@ -2519,25 +2559,34 @@ function templateAddNewBlock() {
 }
 
 function toggleTemplateCard(blockId) {
+    const key = String(blockId);
     const safe = templateBlockDomSafe(blockId);
     const body = document.getElementById(`templateBody_${safe}`);
     const icon = document.getElementById(`templateChev_${safe}`);
     if (!body) return;
     const open = body.style.display !== 'none';
-    body.style.display = open ? 'none' : 'block';
-    if (icon) icon.textContent = open ? '▸' : '▾';
+    if (open) {
+        templateExpandedCardIds.delete(key);
+        body.style.display = 'none';
+        if (icon) icon.textContent = '▸';
+    } else {
+        templateExpandedCardIds.add(key);
+        body.style.display = 'block';
+        if (icon) icon.textContent = '▾';
+    }
 }
 
 function copyTemplateChecklist(blockId) {
     const data = getData();
     const t = (data.templateBlocks || []).find(x => x.id === blockId);
     if (!t) return;
-    const lines = flattenTemplateItemsForCopy(t.items || [], 0);
-    const text = `${t.title || 'Checklist'}\n${lines.join('\n')}`;
+    const header = ['Level', 'Severity', 'Label', 'Done'].join('\t');
+    const lines = flattenTemplateItemsForExcelTsv(t.items || [], 0);
+    const text = `${t.title || 'Checklist'}\n${header}\n${lines.join('\n')}`;
     if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard
             .writeText(text)
-            .then(() => alert('Checklist copied to clipboard.'))
+            .then(() => alert('Copied (tab-separated). Paste into Excel — columns: Level, Severity, Label, Done.'))
             .catch(() => alert(text));
     } else {
         alert(text);
@@ -2577,16 +2626,17 @@ function renderTemplateTab() {
                         const bid = t.id;
                         const safe = templateBlockDomSafe(bid);
                         const bidJs = JSON.stringify(bid);
+                        const expanded = templateExpandedCardIds.has(String(bid));
                         return `
                 <div class="card" style="margin:0;overflow:hidden;border-left:4px solid ${border};">
                     <div style="display:flex;align-items:stretch;gap:8px;">
                         <button type="button" onclick='toggleTemplateCard(${bidJs})' style="flex:1;text-align:left;background:transparent;border:none;padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;min-width:0;">
-                            <span id="templateChev_${safe}" style="font-size:18px;color:#667eea;flex-shrink:0;">▸</span>
+                            <span id="templateChev_${safe}" style="font-size:18px;color:#667eea;flex-shrink:0;">${expanded ? '▾' : '▸'}</span>
                             <span style="font-size:18px;font-weight:600;color:#333;">${escapeHtml(t.title || 'Untitled')}</span>
                         </button>
                         <button type="button" class="btn btn-danger" onclick='templateDeleteBlock(${bidJs})' style="align-self:center;margin:8px 12px 8px 0;padding:8px 12px;font-size:12px;white-space:nowrap;flex-shrink:0;" title="Remove this entire template block">Remove block</button>
                     </div>
-                    <div id="templateBody_${safe}" style="display:none;padding:0 16px 16px 44px;">
+                    <div id="templateBody_${safe}" style="display:${expanded ? 'block' : 'none'};padding:0 16px 16px 44px;">
                         <label style="display:block;margin-bottom:10px;font-size:13px;color:#555;">Title
                             <input type="text" class="form-control" style="margin-top:4px;" value="${escapeHtml(t.title || '')}" onchange='templateSetBlockTitle(${bidJs}, this.value)' />
                         </label>
