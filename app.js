@@ -1,4 +1,4 @@
-const APP_VERSION = '17.1.0';
+const APP_VERSION = '17.2.0';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -490,7 +490,8 @@ function defaultWorkspaceShell() {
         codeSnippets: [],
         journal: {},
         reportToOptions: [],
-        tenantReportToOptions: []
+        tenantReportToOptions: [],
+        templateBlocks: []
     };
 }
 
@@ -1157,7 +1158,8 @@ function normalizeData(data) {
             codeSnippets: [],
             journal: {},
             reportToOptions: [],
-            tenantReportToOptions: []
+            tenantReportToOptions: [],
+            templateBlocks: []
         };
     }
 
@@ -1184,7 +1186,8 @@ function normalizeData(data) {
         codeSnippets: Array.isArray(data.codeSnippets) ? data.codeSnippets : [],
         journal: data.journal && typeof data.journal === 'object' ? data.journal : {},
         reportToOptions: Array.isArray(data.reportToOptions) ? data.reportToOptions : [],
-        tenantReportToOptions: Array.isArray(data.tenantReportToOptions) ? data.tenantReportToOptions : []
+        tenantReportToOptions: Array.isArray(data.tenantReportToOptions) ? data.tenantReportToOptions : [],
+        templateBlocks: Array.isArray(data.templateBlocks) ? data.templateBlocks : []
     };
 }
 
@@ -2289,21 +2292,253 @@ const TEMPLATE_LIBRARY = [
     },
 ];
 
-function toggleTemplateCard(id) {
-    const body = document.getElementById(`templateBody_${id}`);
-    const icon = document.getElementById(`templateChev_${id}`);
+function newTemplateEntityId() {
+    return 'tpl_' + (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now() + '_' + Math.random().toString(36).slice(2, 11));
+}
+
+function normalizeTemplateItemNode(it) {
+    const raw = it && typeof it === 'object' ? it : {};
+    return {
+        id: raw.id != null ? String(raw.id) : newTemplateEntityId(),
+        label: raw.label != null ? String(raw.label) : '',
+        checked: !!raw.checked,
+        children: Array.isArray(raw.children) ? raw.children.map(normalizeTemplateItemNode) : []
+    };
+}
+
+function seedTemplateBlocksFromLibrary(userId) {
+    const uid = Number(userId);
+    return TEMPLATE_LIBRARY.map((t, idx) => ({
+        id: `seed_${t.id}_${idx}`,
+        title: t.title,
+        created_by: uid,
+        items: t.items.map(label =>
+            normalizeTemplateItemNode({ label, checked: false, children: [] })
+        )
+    }));
+}
+
+function templatePathParts(pathStr) {
+    if (pathStr == null || pathStr === '') return [];
+    return String(pathStr)
+        .split('-')
+        .map(p => parseInt(p, 10))
+        .filter(n => !Number.isNaN(n));
+}
+
+function getTemplateItemNodeByPath(items, pathParts) {
+    if (!pathParts.length || !Array.isArray(items)) return null;
+    let cur = items;
+    let node = null;
+    for (let i = 0; i < pathParts.length; i++) {
+        node = cur[pathParts[i]];
+        if (!node) return null;
+        if (i < pathParts.length - 1) {
+            if (!node.children) node.children = [];
+            cur = node.children;
+        }
+    }
+    return node;
+}
+
+function removeTemplateItemAtPath(items, pathParts) {
+    if (pathParts.length === 0 || !Array.isArray(items)) return false;
+    if (pathParts.length === 1) {
+        items.splice(pathParts[0], 1);
+        return true;
+    }
+    let cur = items;
+    for (let i = 0; i < pathParts.length - 1; i++) {
+        const n = cur[pathParts[i]];
+        if (!n || !n.children) return false;
+        cur = n.children;
+    }
+    cur.splice(pathParts[pathParts.length - 1], 1);
+    return true;
+}
+
+function walkTemplateItemsResetCheckboxes(items) {
+    if (!Array.isArray(items)) return;
+    for (const it of items) {
+        it.checked = false;
+        if (it.children && it.children.length) walkTemplateItemsResetCheckboxes(it.children);
+    }
+}
+
+function flattenTemplateItemsForCopy(items, depth) {
+    const lines = [];
+    const pad = '  '.repeat(depth || 0);
+    if (!Array.isArray(items)) return lines;
+    items.forEach((it, i) => {
+        lines.push(`${pad}${i + 1}. ${it.label || ''}`);
+        if (it.children && it.children.length) {
+            lines.push(...flattenTemplateItemsForCopy(it.children, (depth || 0) + 1));
+        }
+    });
+    return lines;
+}
+
+function templateBlockDomSafe(blockId) {
+    return String(blockId).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function templateFindBlock(data, blockId) {
+    const blocks = data.templateBlocks || [];
+    return blocks.find(b => b.id === blockId);
+}
+
+function renderTemplateItemsHtml(items, blockId, prefix) {
+    if (!Array.isArray(items) || items.length === 0) {
+        return '<p style="color:#999;font-size:13px;margin:8px 0;">No items yet. Use “Add item”.</p>';
+    }
+    const bidJs = JSON.stringify(blockId);
+    return items
+        .map((it, idx) => {
+            const path = prefix === '' ? String(idx) : `${prefix}-${idx}`;
+            const pathJs = JSON.stringify(path);
+            const margin = prefix ? 18 : 0;
+            const sub = renderTemplateItemsHtml(it.children || [], blockId, path);
+            return `
+            <div style="margin-left:${margin}px;border-left:2px solid #e0e7ff;padding-left:10px;margin-bottom:10px;">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <input type="checkbox" ${it.checked ? 'checked' : ''} onchange="templateItemSetChecked(${bidJs},${pathJs},this.checked)" />
+                    <input type="text" class="form-control" style="flex:1;min-width:180px;font-size:14px;" value="${escapeHtml(it.label)}" onchange="templateItemSetLabel(${bidJs},${pathJs},this.value)" />
+                </div>
+                <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;" onclick="templateAddChildItem(${bidJs},${pathJs})">Add sub-item</button>
+                    <button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px;" onclick="templateRemoveItem(${bidJs},${pathJs})">Remove</button>
+                </div>
+                ${sub}
+            </div>`;
+        })
+        .join('');
+}
+
+function templateItemSetChecked(blockId, pathStr, checked) {
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        const node = getTemplateItemNodeByPath(b.items, templatePathParts(pathStr));
+        if (node) node.checked = !!checked;
+    });
+    renderTemplateTab();
+}
+
+function templateItemSetLabel(blockId, pathStr, label) {
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        const node = getTemplateItemNodeByPath(b.items, templatePathParts(pathStr));
+        if (node) node.label = label;
+    });
+    renderTemplateTab();
+}
+
+function templateAddChildItem(blockId, pathStr) {
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        const parts = templatePathParts(pathStr);
+        const node = getTemplateItemNodeByPath(b.items, parts);
+        if (!node) return;
+        if (!node.children) node.children = [];
+        node.children.push(normalizeTemplateItemNode({ label: '', checked: false, children: [] }));
+    });
+    renderTemplateTab();
+}
+
+function templateAddRootItem(blockId) {
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        if (!Array.isArray(b.items)) b.items = [];
+        b.items.push(normalizeTemplateItemNode({ label: '', checked: false, children: [] }));
+    });
+    renderTemplateTab();
+}
+
+function templateRemoveItem(blockId, pathStr) {
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        removeTemplateItemAtPath(b.items, templatePathParts(pathStr));
+    });
+    renderTemplateTab();
+}
+
+function templateRemoveAllItems(blockId) {
+    if (!confirm('Remove all items in this section?')) return;
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        b.items = [];
+    });
+    renderTemplateTab();
+}
+
+function templateResetCheckboxes(blockId) {
+    if (!confirm('Reset all checkboxes in this section?')) return;
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        walkTemplateItemsResetCheckboxes(b.items || []);
+    });
+    renderTemplateTab();
+}
+
+function templateDeleteBlock(blockId) {
+    if (!confirm('Delete this template block?')) return;
+    updateData(data => {
+        if (!Array.isArray(data.templateBlocks)) return;
+        data.templateBlocks = data.templateBlocks.filter(x => x.id !== blockId);
+    });
+    renderTemplateTab();
+}
+
+function templateSetBlockTitle(blockId, title) {
+    updateData(data => {
+        const b = templateFindBlock(data, blockId);
+        if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
+        b.title = title;
+    });
+    renderTemplateTab();
+}
+
+function templateAddNewBlock() {
+    if (!currentUser) return;
+    updateData(data => {
+        if (!Array.isArray(data.templateBlocks)) data.templateBlocks = [];
+        data.templateBlocks.push({
+            id: newTemplateEntityId(),
+            title: 'New checklist',
+            created_by: currentUser.id,
+            items: []
+        });
+    });
+    renderTemplateTab();
+}
+
+function toggleTemplateCard(blockId) {
+    const safe = templateBlockDomSafe(blockId);
+    const body = document.getElementById(`templateBody_${safe}`);
+    const icon = document.getElementById(`templateChev_${safe}`);
     if (!body) return;
     const open = body.style.display !== 'none';
     body.style.display = open ? 'none' : 'block';
     if (icon) icon.textContent = open ? '▸' : '▾';
 }
 
-function copyTemplateChecklist(id) {
-    const t = TEMPLATE_LIBRARY.find(x => x.id === id);
+function copyTemplateChecklist(blockId) {
+    const data = getData();
+    const t = (data.templateBlocks || []).find(x => x.id === blockId);
     if (!t) return;
-    const text = `${t.title}\n${t.items.map((x, i) => `${i + 1}. ${x}`).join('\n')}`;
+    const lines = flattenTemplateItemsForCopy(t.items || [], 0);
+    const text = `${t.title || 'Checklist'}\n${lines.join('\n')}`;
     if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(() => alert('Checklist copied to clipboard.')).catch(() => alert(text));
+        navigator.clipboard
+            .writeText(text)
+            .then(() => alert('Checklist copied to clipboard.'))
+            .catch(() => alert(text));
     } else {
         alert(text);
     }
@@ -2312,28 +2547,59 @@ function copyTemplateChecklist(id) {
 function renderTemplateTab() {
     const root = document.getElementById('templatesRoot');
     if (!root) return;
+    if (!currentUser) {
+        root.innerHTML = '<p style="color:#999;">Sign in to manage templates.</p>';
+        return;
+    }
+    let data = getData();
+    if (!Array.isArray(data.templateBlocks) || data.templateBlocks.length === 0) {
+        updateData(d => {
+            if (!Array.isArray(d.templateBlocks) || d.templateBlocks.length === 0) {
+                d.templateBlocks = seedTemplateBlocksFromLibrary(currentUser.id);
+            }
+        });
+        data = getData();
+    }
+    const blocks = (data.templateBlocks || []).filter(
+        b => b && Number(b.created_by) === Number(currentUser.id)
+    );
+    const colors = ['#3949ab', '#00897b', '#f57c00', '#6a1b9a', '#c62828'];
+    const addBlockJs = 'templateAddNewBlock()';
     root.innerHTML = `
         <div style="max-width:900px;margin:0 auto;">
             <h2 style="margin-bottom:8px;">Template Library</h2>
-            <p style="color:#666;margin-bottom:20px;">Starter workflows — expand a card, copy the checklist, or jump to Task Setup to create work items. All dates/times in the app follow <strong>IST (UTC+05:30)</strong>.</p>
+            <p style="color:#666;margin-bottom:16px;">Editable checklists stored in your workspace. Expand a card to edit, or jump to Task Setup to create work items. All dates/times in the app follow <strong>IST (UTC+05:30)</strong>.</p>
+            <button type="button" class="btn btn-primary" style="margin-bottom:16px;" onclick="${addBlockJs}">Add template block</button>
             <div style="display:flex;flex-direction:column;gap:12px;">
-                ${TEMPLATE_LIBRARY.map(
-                    (t, idx) => `
-                <div class="card" style="margin:0;overflow:hidden;border-left:4px solid ${idx === 0 ? '#3949ab' : idx === 1 ? '#00897b' : '#f57c00'};">
-                    <button type="button" onclick="toggleTemplateCard('${t.id}')" style="width:100%;text-align:left;background:transparent;border:none;padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;">
-                        <span id="templateChev_${t.id}" style="font-size:18px;color:#667eea;">▸</span>
-                        <span style="font-size:18px;font-weight:600;color:#333;">${escapeHtml(t.title)}</span>
+                ${blocks
+                    .map((t, idx) => {
+                        const border = colors[idx % colors.length];
+                        const bid = t.id;
+                        const safe = templateBlockDomSafe(bid);
+                        const bidJs = JSON.stringify(bid);
+                        return `
+                <div class="card" style="margin:0;overflow:hidden;border-left:4px solid ${border};">
+                    <button type="button" onclick="toggleTemplateCard(${bidJs})" style="width:100%;text-align:left;background:transparent;border:none;padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;">
+                        <span id="templateChev_${safe}" style="font-size:18px;color:#667eea;">▸</span>
+                        <span style="font-size:18px;font-weight:600;color:#333;">${escapeHtml(t.title || 'Untitled')}</span>
                     </button>
-                    <div id="templateBody_${t.id}" style="display:none;padding:0 16px 16px 44px;">
-                        <p style="color:#666;font-size:14px;margin:0 0 12px;">${escapeHtml(t.blurb)}</p>
-                        <ul style="line-height:1.85;margin:0 0 14px;padding-left:20px;color:#444;">
-                            ${t.items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}
-                        </ul>
-                        <button type="button" class="btn btn-secondary" onclick="copyTemplateChecklist('${t.id}')" style="margin-right:8px;">Copy checklist</button>
-                        <button type="button" class="btn btn-primary" onclick="switchTab('tasks', null)">Open Task Setup</button>
+                    <div id="templateBody_${safe}" style="display:none;padding:0 16px 16px 44px;">
+                        <label style="display:block;margin-bottom:10px;font-size:13px;color:#555;">Title
+                            <input type="text" class="form-control" style="margin-top:4px;" value="${escapeHtml(t.title || '')}" onchange="templateSetBlockTitle(${bidJs}, this.value)" />
+                        </label>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+                            <button type="button" class="btn btn-secondary" onclick="templateAddRootItem(${bidJs})">Add item</button>
+                            <button type="button" class="btn btn-secondary" onclick="templateRemoveAllItems(${bidJs})">Remove all items</button>
+                            <button type="button" class="btn btn-secondary" onclick="templateResetCheckboxes(${bidJs})">Reset all checkboxes</button>
+                            <button type="button" class="btn btn-secondary" onclick="copyTemplateChecklist(${bidJs})">Copy checklist</button>
+                            <button type="button" class="btn btn-primary" onclick="switchTab('tasks', null)">Open Task Setup</button>
+                            <button type="button" class="btn btn-danger" onclick="templateDeleteBlock(${bidJs})">Delete block</button>
+                        </div>
+                        ${renderTemplateItemsHtml(t.items || [], bid, '')}
                     </div>
-                </div>`
-                ).join('')}
+                </div>`;
+                    })
+                    .join('')}
             </div>
         </div>`;
 }
@@ -6029,6 +6295,111 @@ function getLastWorkingDayOfMonth(year, monthIndex) {
     }
 }
 
+/** Column sort for recurring dashboard (persists across re-renders). */
+let recurringReportSortState = { key: 'task', dir: 'asc', monthCol: null };
+
+/** Header label: calendar month before the data column’s month (“reporting month” convention). */
+function recurringReportingMonthLabel(year, monthIndex) {
+    let py = year;
+    let pm = monthIndex - 1;
+    if (pm < 0) {
+        pm = 11;
+        py -= 1;
+    }
+    const d = new Date(py, pm, 1);
+    return new Intl.DateTimeFormat('en-IN', {
+        timeZone: APP_TIMEZONE,
+        month: 'short',
+        year: 'numeric'
+    }).format(d);
+}
+
+function recurringReportDayOfMonth(baseTask) {
+    if (baseTask.due_day != null && baseTask.due_day !== '') {
+        const n = Number(baseTask.due_day);
+        if (!Number.isNaN(n) && n >= 1 && n <= 31) return n;
+    }
+    const dueStr = baseTask.due_date || baseTask.next_due_date;
+    if (dueStr) {
+        const parts = dueStr.split('-');
+        if (parts.length >= 3) {
+            const d = parseInt(parts[2], 10);
+            if (!Number.isNaN(d)) return d;
+        }
+    }
+    return null;
+}
+
+function onRecurringReportSortClick(key, monthCol) {
+    if (recurringReportSortState.key === key && recurringReportSortState.monthCol === monthCol) {
+        recurringReportSortState.dir = recurringReportSortState.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+        recurringReportSortState.key = key;
+        recurringReportSortState.monthCol = monthCol;
+        recurringReportSortState.dir = 'asc';
+    }
+    renderRecurringReport();
+}
+
+function buildRecurringReportMonthCell(instance) {
+    if (!instance) {
+        return {
+            html: '<td style="text-align: center; color: #ccc; background: #f5f5f5;">–</td>',
+            sortKey: ''
+        };
+    }
+
+    let statusText = '';
+    let bgColor = '#ffffff';
+    let textColor = '#000000';
+    if (instance.task_action === 'completed') {
+        statusText = 'Completed';
+        bgColor = '#b7e1cd';
+    } else if (instance.task_action === 'completed_need_improvement') {
+        statusText = 'Needs Improvement';
+        bgColor = '#ffe599';
+    } else if (instance.task_action === 'in_process') {
+        statusText = 'In Process';
+        bgColor = '#d1ecf1';
+    } else if (instance.task_action === 'not_done') {
+        statusText = 'Not Done';
+        bgColor = '#ff4d4f';
+        textColor = '#ffffff';
+    } else {
+        const dueStr = instance.due_date || instance.next_due_date;
+        if (dueStr) {
+            const [yy, mm, dd] = dueStr.split('-').map(Number);
+            const d = new Date(yy, mm - 1, dd);
+            d.setHours(0, 0, 0, 0);
+            const today0 = new Date();
+            today0.setHours(0, 0, 0, 0);
+            if (d < today0) {
+                statusText = 'Overdue';
+                bgColor = '#f8d7da';
+            } else {
+                statusText = 'Pending';
+                bgColor = '#fff3cd';
+            }
+        } else {
+            statusText = 'Pending';
+            bgColor = '#fff3cd';
+        }
+    }
+
+    let completionPart = '';
+    if (isTaskCompleted(instance)) {
+        const cd = instance.completion_date ||
+            (instance.completed_at ? instance.completed_at.split('T')[0] : '');
+        if (cd) {
+            completionPart = ` (${formatDateDisplay(cd)})`;
+        }
+    }
+
+    const sortKey = `${statusText}${completionPart}`;
+    const html = `<td style="font-size: 12px; background: ${bgColor}; color: ${textColor}; cursor: pointer;" title="Click to update status" onclick="event.stopPropagation(); openInteractiveTaskPopup(${instance.id})">${statusText}${completionPart}</td>`;
+    return { html, sortKey };
+}
+
 // Recurring Tasks Performance Report
 function renderRecurringReport() {
     const data = getData();
@@ -6087,18 +6458,15 @@ function renderRecurringReport() {
         return;
     }
 
-    const monthHeaders = months.map(({ year, monthIndex }) => {
-        const d = new Date(year, monthIndex, 1);
-        const label = new Intl.DateTimeFormat('en-IN', {
-            timeZone: APP_TIMEZONE,
-            month: 'short',
-            year: 'numeric'
-        }).format(d);
-        return `<th style="white-space: nowrap;">${label}</th>`;
+    const thSort = 'cursor:pointer;user-select:none;white-space:nowrap;';
+    const monthHeaders = months.map(({ year, monthIndex }, i) => {
+        const label = recurringReportingMonthLabel(year, monthIndex);
+        return `<th style="${thSort}" title="Click to sort" onclick="onRecurringReportSortClick('month', ${i})">${label}</th>`;
     }).join('');
 
-    const rowsHtml = baseRecurring.map(baseTask => {
+    const rowModels = baseRecurring.map(baseTask => {
         const assignedUser = data.users.find(u => u.id === baseTask.assigned_to);
+        const assignedName = assignedUser ? assignedUser.name : '';
         const seriesTasks = data.tasks.filter(t =>
             t.task_type === 'recurring' &&
             t.task_name === baseTask.task_name &&
@@ -6106,79 +6474,65 @@ function renderRecurringReport() {
             t.location_id === baseTask.location_id &&
             t.frequency === baseTask.frequency
         );
-
+        const dayNum = recurringReportDayOfMonth(baseTask);
         const cells = months.map(({ year, monthIndex }) => {
             const instance = findRecurringInstanceForMonth(seriesTasks, year, monthIndex);
-            if (!instance) {
-                return '<td style="text-align: center; color: #ccc; background: #f5f5f5;">–</td>';
-            }
+            return buildRecurringReportMonthCell(instance);
+        });
+        return {
+            baseTask,
+            taskName: baseTask.task_name || '',
+            dayNum,
+            assignedName,
+            cells
+        };
+    });
 
-            let statusText = '';
-            let bgColor = '#ffffff';
-            let textColor = '#000000';
-            if (instance.task_action === 'completed') {
-                statusText = 'Completed';
-                bgColor = '#b7e1cd'; // light green
-            } else if (instance.task_action === 'completed_need_improvement') {
-                statusText = 'Needs Improvement';
-                bgColor = '#ffe599'; // light orange
-            } else if (instance.task_action === 'in_process') {
-                statusText = 'In Process';
-                bgColor = '#d1ecf1'; // light blue
-            } else if (instance.task_action === 'not_done') {
-                statusText = 'Not Done';
-                bgColor = '#ff4d4f'; // red
-                textColor = '#ffffff';
-            } else {
-                // Pending / Overdue
-                const dueStr = instance.due_date || instance.next_due_date;
-                if (dueStr) {
-                    const [yy, mm, dd] = dueStr.split('-').map(Number);
-                    const d = new Date(yy, mm - 1, dd);
-                    d.setHours(0, 0, 0, 0);
-                    const today0 = new Date();
-                    today0.setHours(0, 0, 0, 0);
-                    if (d < today0) {
-                        statusText = 'Overdue';
-                        bgColor = '#f8d7da'; // light red
-                    } else {
-                        statusText = 'Pending';
-                        bgColor = '#fff3cd'; // yellow
-                    }
-                } else {
-                    statusText = 'Pending';
-                    bgColor = '#fff3cd';
-                }
-            }
+    const { key: sortKey, dir: sortDir, monthCol } = recurringReportSortState;
+    const mul = sortDir === 'asc' ? 1 : -1;
+    rowModels.sort((a, b) => {
+        let c = 0;
+        if (sortKey === 'task') {
+            c = a.taskName.localeCompare(b.taskName);
+        } else if (sortKey === 'day') {
+            const av = a.dayNum == null ? 999 : a.dayNum;
+            const bv = b.dayNum == null ? 999 : b.dayNum;
+            c = av - bv;
+            if (c === 0) c = a.taskName.localeCompare(b.taskName);
+        } else if (sortKey === 'assign') {
+            c = a.assignedName.localeCompare(b.assignedName);
+            if (c === 0) c = a.taskName.localeCompare(b.taskName);
+        } else if (sortKey === 'month' && monthCol != null && monthCol >= 0) {
+            const ak = (a.cells[monthCol] && a.cells[monthCol].sortKey) || '';
+            const bk = (b.cells[monthCol] && b.cells[monthCol].sortKey) || '';
+            c = ak.localeCompare(bk);
+            if (c === 0) c = a.taskName.localeCompare(b.taskName);
+        }
+        return mul * c;
+    });
 
-            let completionPart = '';
-            if (isTaskCompleted(instance)) {
-                const cd = instance.completion_date ||
-                    (instance.completed_at ? instance.completed_at.split('T')[0] : '');
-                if (cd) {
-                    completionPart = ` (${formatDateDisplay(cd)})`;
-                }
-            }
-
-            return `<td style="font-size: 12px; background: ${bgColor}; color: ${textColor}; cursor: pointer;" title="Click to update status" onclick="event.stopPropagation(); openInteractiveTaskPopup(${instance.id})">${statusText}${completionPart}</td>`;
-        }).join('');
-
+    const rowsHtml = rowModels.map(({ baseTask, dayNum, assignedName, cells }) => {
+        const dayStr = dayNum != null ? String(dayNum) : '—';
+        const cellsHtml = cells.map(c => c.html).join('');
         return `
             <tr>
                 <td style="font-weight: 500; white-space: nowrap;">${baseTask.task_name}</td>
-                <td style="font-size: 12px;">${assignedUser ? assignedUser.name : ''}</td>
-                ${cells}
+                <td style="font-size: 12px; text-align: center;">${dayStr}</td>
+                <td style="font-size: 12px;">${assignedName}</td>
+                ${cellsHtml}
             </tr>
         `;
     }).join('');
 
     container.innerHTML = `
         <div class="table-container" style="background: white; border-radius: 8px; overflow: auto; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <p style="margin: 0 0 12px; font-size: 14px; color: #555; font-weight: 500;">Dashboard Based on Reporting month</p>
             <table class="table" id="recurringReportTable" style="margin: 0; min-width: 600px; border-collapse: collapse;">
                 <thead>
                     <tr>
-                        <th>Task Name</th>
-                        <th>Assigned To</th>
+                        <th style="${thSort}" title="Click to sort" onclick="onRecurringReportSortClick('task', null)">Task Name</th>
+                        <th style="${thSort}" title="Click to sort" onclick="onRecurringReportSortClick('day', null)">Day</th>
+                        <th style="${thSort}" title="Click to sort" onclick="onRecurringReportSortClick('assign', null)">Assigned To</th>
                         ${monthHeaders}
                     </tr>
                 </thead>
@@ -8007,6 +8361,29 @@ function updateMonthFilter() {
     renderInteractiveDashboard();
 }
 
+/** Short status label for Task View email; aligns with dashboard/recurring palette in sendTaskViewSummaryEmail. */
+function interactiveTaskViewStatusForEmail(task) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dueDate = task.due_date || task.next_due_date;
+    if (task.task_action === 'completed') return 'Completed';
+    if (task.task_action === 'completed_need_improvement') return 'Needs Improvement';
+    if (task.task_action === 'in_process') return 'In Process';
+    if (task.task_action === 'not_done') return 'Not Done';
+    if (dueDate) {
+        const dateParts = dueDate.split('-');
+        const taskDate = new Date(
+            parseInt(dateParts[0], 10),
+            parseInt(dateParts[1], 10) - 1,
+            parseInt(dateParts[2], 10)
+        );
+        taskDate.setHours(0, 0, 0, 0);
+        if (taskDate < today) return 'Overdue';
+        return 'Pending';
+    }
+    return 'No Due Date';
+}
+
 function buildInteractiveEmailRecipientsPayload(filteredTasks) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -8027,6 +8404,7 @@ function buildInteractiveEmailRecipientsPayload(filteredTasks) {
             title: t.task_name || 'Task',
             due: dueRaw ? formatDateDisplay(dueRaw) : '',
             overdue,
+            status: interactiveTaskViewStatusForEmail(t),
         });
     }
     return [...byUser.entries()].map(([userId, tasks]) => ({ userId, tasks }));

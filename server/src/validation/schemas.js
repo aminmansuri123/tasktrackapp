@@ -16,6 +16,7 @@ const workspacePutSchema = z
     codeSnippets: z.array(z.unknown()).max(20000).optional(),
     journal: z.record(z.string(), z.unknown()).optional(),
     reportToOptions: z.array(z.unknown()).max(200).optional(),
+    templateBlocks: z.array(z.unknown()).max(5000).optional(),
   });
 
 const loginBodySchema = z.object({
@@ -78,6 +79,7 @@ const emailTaskViewSummarySchema = z.object({
               title: z.string().max(2000),
               due: z.string().max(120).optional(),
               overdue: z.boolean().optional(),
+              status: z.string().max(80).optional(),
             })
           )
           .max(5000),

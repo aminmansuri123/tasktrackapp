@@ -33,7 +33,7 @@ const { getSiteSettings, sanitizeReportToOptions } = require('../services/regist
 
 const router = express.Router();
 
-const EXPORT_VERSION = '17.1.0';
+const EXPORT_VERSION = '17.2.0';
 
 function isLegacyFlatJournal(j) {
   if (!j || typeof j !== 'object' || Array.isArray(j)) return false;
@@ -104,7 +104,7 @@ function migrateWorkspaceDataInPlace(ws, tenantRoot) {
     d.journal = { [String(tenantRoot)]: { ...d.journal } };
     changed = true;
   }
-  const listKeys = ['milestones', 'notes', 'learningNotes', 'dailyPlanner'];
+  const listKeys = ['milestones', 'notes', 'learningNotes', 'dailyPlanner', 'templateBlocks'];
   for (const key of listKeys) {
     if (!Array.isArray(d[key])) continue;
     for (const item of d[key]) {
@@ -126,17 +126,26 @@ function migrateWorkspaceDataInPlace(ws, tenantRoot) {
   return changed;
 }
 
-/** Non-admin: only this user's rows + their diary slice. Admins use full arrays; diary still per-user in API. */
+/** Non-admin: only this user's rows + their diary slice. */
 function scopeWorkspaceForTenantUser(normalized, userId, tenantRoot) {
   const nested = ensureJournalNested(normalized.journal, tenantRoot);
   return {
-    ...normalized,
-    milestones: filterByCreatedBy(normalized.milestones, userId),
-    notes: filterByCreatedBy(normalized.notes, userId),
-    learningNotes: filterByCreatedBy(normalized.learningNotes, userId),
-    dailyPlanner: filterByCreatedBy(normalized.dailyPlanner, userId),
-    codeSnippets: filterByCreatedBy(normalized.codeSnippets, userId),
+    ...scopePersonalListsForUser(normalized, userId),
     journal: journalFlatForUser(nested, userId),
+  };
+}
+
+/** Admin GET/PUT response: personal lists scoped to the logged-in user (same as non-admin for these fields). */
+function scopePersonalListsForUser(obj, userId) {
+  const uid = Number(userId);
+  return {
+    ...obj,
+    milestones: filterByCreatedBy(obj.milestones, uid),
+    notes: filterByCreatedBy(obj.notes, uid),
+    learningNotes: filterByCreatedBy(obj.learningNotes, uid),
+    dailyPlanner: filterByCreatedBy(obj.dailyPlanner, uid),
+    codeSnippets: filterByCreatedBy(obj.codeSnippets, uid),
+    templateBlocks: filterByCreatedBy(obj.templateBlocks, uid),
   };
 }
 
@@ -434,7 +443,10 @@ router.get('/', authMiddleware, async (req, res) => {
     if (req.user.role !== 'admin') {
       out = scopeWorkspaceForTenantUser(out, req.user.userId, tenantRoot);
     } else {
-      out = { ...normalized, journal: journalFlatForUser(nestedJ, req.user.userId) };
+      out = scopePersonalListsForUser(
+        { ...normalized, journal: journalFlatForUser(nestedJ, req.user.userId) },
+        req.user.userId
+      );
     }
     if (ws.updatedAt) {
       out._workspaceUpdatedAt = ws.updatedAt.toISOString();
@@ -530,6 +542,11 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
         incoming.codeSnippets,
         req.user.userId
       );
+      merged.templateBlocks = mergeArrayByCreatedBy(
+        existingNormalized.templateBlocks,
+        incoming.templateBlocks,
+        req.user.userId
+      );
     } else {
       try {
         const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
@@ -550,6 +567,32 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
       } catch (syncErr) {
         console.error('PUT /workspace: user sync error (workspace will still save):', syncErr);
       }
+      merged.milestones = mergeArrayByCreatedBy(
+        existingNormalized.milestones,
+        incoming.milestones,
+        req.user.userId
+      );
+      merged.notes = mergeArrayByCreatedBy(existingNormalized.notes, incoming.notes, req.user.userId);
+      merged.learningNotes = mergeArrayByCreatedBy(
+        existingNormalized.learningNotes,
+        incoming.learningNotes,
+        req.user.userId
+      );
+      merged.dailyPlanner = mergeArrayByCreatedBy(
+        existingNormalized.dailyPlanner,
+        incoming.dailyPlanner,
+        req.user.userId
+      );
+      merged.codeSnippets = mergeArrayByCreatedBy(
+        existingNormalized.codeSnippets,
+        incoming.codeSnippets,
+        req.user.userId
+      );
+      merged.templateBlocks = mergeArrayByCreatedBy(
+        existingNormalized.templateBlocks,
+        incoming.templateBlocks,
+        req.user.userId
+      );
     }
 
     const users = await loadTenantUsers(tenantRoot, req.user.userId);
@@ -576,7 +619,10 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
       payload = scopeWorkspaceForTenantUser(payload, req.user.userId, tenantRoot);
     } else {
       const nestedJ = ensureJournalNested(merged.journal, tenantRoot);
-      payload = { ...merged, journal: journalFlatForUser(nestedJ, req.user.userId) };
+      payload = scopePersonalListsForUser(
+        { ...merged, journal: journalFlatForUser(nestedJ, req.user.userId) },
+        req.user.userId
+      );
     }
     try {
       const site = await getSiteSettings();

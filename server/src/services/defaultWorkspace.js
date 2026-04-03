@@ -20,6 +20,7 @@ function defaultWorkspaceData() {
     codeSnippets: [],
     journal: {},
     reportToOptions: [],
+    templateBlocks: [],
   };
 }
 
@@ -41,6 +42,7 @@ function normalizeWorkspacePayload(data) {
     codeSnippets: Array.isArray(data.codeSnippets) ? data.codeSnippets : [],
     journal: data.journal && typeof data.journal === 'object' ? data.journal : {},
     reportToOptions: Array.isArray(data.reportToOptions) ? data.reportToOptions : [],
+    templateBlocks: Array.isArray(data.templateBlocks) ? data.templateBlocks : [],
   };
 }
 

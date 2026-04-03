@@ -377,11 +377,40 @@ async function sendTestEmail(toEmail, userName) {
   return true;
 }
 
+/** Dashboard-aligned status cell colors (recurring report / Task View). */
+function taskViewEmailStatusStyle(statusLabel) {
+  const s = String(statusLabel || '').trim();
+  const map = {
+    Completed: { bg: '#b7e1cd', color: '#000000' },
+    'Needs Improvement': { bg: '#ffe599', color: '#000000' },
+    'Need Improvement': { bg: '#ffe599', color: '#000000' },
+    'In Process': { bg: '#d1ecf1', color: '#000000' },
+    'Not Done': { bg: '#ff4d4f', color: '#ffffff' },
+    Overdue: { bg: '#f8d7da', color: '#000000' },
+    Pending: { bg: '#fff3cd', color: '#000000' },
+    'No Due Date': { bg: '#e3f2fd', color: '#000000' },
+  };
+  return map[s] || { bg: '#ffffff', color: '#000000' };
+}
+
+function formatIstGeneratedLine() {
+  try {
+    const fmt = new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+    return fmt.format(new Date());
+  } catch (_) {
+    return new Date().toISOString();
+  }
+}
+
 /**
  * Task View “email filtered list” — one message per assignee with a simple HTML table.
  * @param {string} toEmail
  * @param {string} userName
- * @param {{ title: string, due?: string, overdue?: boolean }[]} tasks
+ * @param {{ title: string, due?: string, overdue?: boolean, status?: string }[]} tasks
  */
 async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
   if (!isEmailEnabled()) {
@@ -391,20 +420,47 @@ async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
     throw new Error('No tasks');
   }
   const rows = tasks
-    .map(
-      (t) =>
-        `<tr><td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(t.title || '(untitled)')}</td><td style="padding:8px;border-bottom:1px solid #eee;">${escapeHtml(t.due || '—')}</td><td style="padding:8px;border-bottom:1px solid #eee;">${t.overdue ? 'Yes' : 'No'}</td></tr>`
-    )
+    .map((t) => {
+      const statusRaw =
+        t.status != null && String(t.status).trim() !== ''
+          ? String(t.status).trim()
+          : t.overdue
+            ? 'Overdue'
+            : 'Pending';
+      const st = taskViewEmailStatusStyle(statusRaw);
+      return `<tr>
+<td style="padding:10px 12px;border-bottom:1px solid #bbdefb;vertical-align:middle;">${escapeHtml(t.title || '(untitled)')}</td>
+<td style="padding:10px 12px;border-bottom:1px solid #bbdefb;vertical-align:middle;color:#1565c0;">${escapeHtml(t.due || '—')}</td>
+<td style="padding:10px 12px;border-bottom:1px solid #bbdefb;vertical-align:middle;font-weight:600;background:${st.bg};color:${st.color};">${escapeHtml(statusRaw)}</td>
+</tr>`;
+    })
     .join('');
+  const istLine = formatIstGeneratedLine();
   const html = `
-    <div style="font-family:Segoe UI,Roboto,sans-serif;max-width:640px;">
-      <p style="margin:0 0 12px;">Hello ${escapeHtml(userName || '')},</p>
-      <p style="margin:0 0 12px;">Here is your Task View summary:</p>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        <thead><tr style="background:#f5f5f5;"><th style="text-align:left;padding:8px;">Task</th><th style="text-align:left;padding:8px;">Due</th><th style="text-align:left;padding:8px;">Overdue</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>${emailBrandFooterHtml()}`;
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#e8f4fc;">
+  <div style="font-family:Segoe UI,Roboto,Helvetica,sans-serif;max-width:720px;margin:0 auto;padding:24px 20px;">
+    <div style="background:#e3f2fd;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(13,71,161,0.08);border-left:5px solid #1976d2;">
+      <div style="padding:22px 24px 18px;">
+        <p style="margin:0 0 10px;font-size:15px;color:#0d47a1;">Hello ${escapeHtml(userName || '')},</p>
+        <p style="margin:0 0 18px;font-size:14px;color:#37474f;">Here is your Task View summary:</p>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;background:#fff;border-radius:8px;overflow:hidden;">
+          <thead>
+            <tr style="background:#bbdefb;color:#0d47a1;">
+              <th style="text-align:left;padding:12px 14px;font-weight:600;">Task</th>
+              <th style="text-align:left;padding:12px 14px;font-weight:600;">Due</th>
+              <th style="text-align:left;padding:12px 14px;font-weight:600;">Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p style="margin:16px 0 0;font-size:12px;color:#546e7a;">Generated ${escapeHtml(istLine)} (IST)</p>
+      </div>
+    </div>
+    ${emailBrandFooterHtml()}
+  </div>
+</body></html>`;
   await sendMail(
     toEmail,
     `Task View summary (${tasks.length} task${tasks.length === 1 ? '' : 's'})`,
