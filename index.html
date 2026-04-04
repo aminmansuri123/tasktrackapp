@@ -1775,12 +1775,12 @@
                 <div class="filter-bar">
                     <div style="flex: 1; min-width: 130px;">
                         <label class="block text-sm font-medium text-gray-700 mb-1" style="font-size: 12px;">From</label>
-                        <input type="month" class="form-control" id="filterTaskMonthFrom" onchange="filterTasks()"
+                        <input type="month" class="form-control" id="filterTaskMonthFrom" onchange="saveTaskListMonthPeriod(); filterTasks()"
                             style="width: 130px;">
                     </div>
                     <div style="flex: 1; min-width: 130px;">
                         <label class="block text-sm font-medium text-gray-700 mb-1" style="font-size: 12px;">To</label>
-                        <input type="month" class="form-control" id="filterTaskMonthTo" onchange="filterTasks()"
+                        <input type="month" class="form-control" id="filterTaskMonthTo" onchange="saveTaskListMonthPeriod(); filterTasks()"
                             style="width: 130px;">
                     </div>
                     <select class="form-control" id="filterStatus" onchange="filterTasks()" style="width: 150px;">

@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.4';
+const APP_VERSION = '17.2.5';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -981,6 +981,14 @@ function saveDashboardPeriod() {
     const toEl = document.getElementById('dashboardPeriodTo');
     if (fromEl && fromEl.value) localStorage.setItem('dashboardPeriodFrom', fromEl.value);
     if (toEl && toEl.value) localStorage.setItem('dashboardPeriodTo', toEl.value);
+}
+
+/** Task list tab month filters use the same localStorage keys as the overview dashboard period. */
+function saveTaskListMonthPeriod() {
+    const taskFrom = document.getElementById('filterTaskMonthFrom');
+    const taskTo = document.getElementById('filterTaskMonthTo');
+    if (taskFrom && taskFrom.value) localStorage.setItem('dashboardPeriodFrom', taskFrom.value);
+    if (taskTo && taskTo.value) localStorage.setItem('dashboardPeriodTo', taskTo.value);
 }
 
 // Interactive Dashboard period (from/to month)
@@ -2294,6 +2302,19 @@ const TEMPLATE_LIBRARY = [
 
 /** Which template cards stay expanded across re-renders (editing items must not collapse the block). */
 const templateExpandedCardIds = new Set();
+/** { blockId, path } while editing an item label; title uses templateEditingTitleBlockId */
+let templateEditingItemRef = null;
+let templateEditingTitleBlockId = null;
+
+function templateItemLabelInputId(blockId, pathStr) {
+    const safeB = templateBlockDomSafe(blockId);
+    const safeP = String(pathStr).replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `templateItemLabelInput_${safeB}_${safeP}`;
+}
+
+function templateTitleInputId(blockId) {
+    return `templateTitleInput_${templateBlockDomSafe(blockId)}`;
+}
 
 function newTemplateEntityId() {
     return 'tpl_' + (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now() + '_' + Math.random().toString(36).slice(2, 11));
@@ -2410,7 +2431,7 @@ function templateFindBlock(data, blockId) {
 
 function renderTemplateItemsHtml(items, blockId, prefix) {
     if (!Array.isArray(items) || items.length === 0) {
-        return '<p style="color:#999;font-size:13px;margin:8px 0;">No items yet. Use “Add item” (▲ adds a sub-line under this row).</p>';
+        return '';
     }
     const bidJs = JSON.stringify(blockId);
     return items
@@ -2422,11 +2443,19 @@ function renderTemplateItemsHtml(items, blockId, prefix) {
             const sev = it.severity === 'R' || it.severity === 'G' || it.severity === 'Y' ? it.severity : '';
             const col = templateSeverityColor(sev);
             const emptySevJs = JSON.stringify('');
+            const editingLabel =
+                templateEditingItemRef &&
+                String(templateEditingItemRef.blockId) === String(blockId) &&
+                templateEditingItemRef.path === path;
+            const labelInputId = templateItemLabelInputId(blockId, path);
+            const labelCell = editingLabel
+                ? `<input type="text" id="${labelInputId}" class="form-control" style="flex:1;min-width:100px;font-size:14px;color:${col};font-weight:${sev ? '600' : '400'};" value="${escapeHtml(it.label)}" onclick="event.stopPropagation();" onkeydown="if(event.key==='Escape'){event.preventDefault();templateCancelEditItemLabel();}" onblur='templateFinishEditItemLabel(${bidJs},${pathJs},this.value)' />`
+                : `<span tabindex="0" class="template-item-label-readonly" style="flex:1;min-width:100px;font-size:14px;line-height:1.4;padding:6px 10px;border:1px solid transparent;border-radius:4px;color:${col};font-weight:${sev ? '600' : '400'};cursor:text;" title="Double-click to edit" ondblclick='event.stopPropagation();templateStartEditItemLabel(${bidJs},${pathJs})' onclick="event.stopPropagation();">${it.label ? escapeHtml(it.label) : '<span style="color:#bbb;">—</span>'}</span>`;
             return `
             <div class="template-item-row" style="margin-left:${margin}px;border-left:2px solid #e0e7ff;padding-left:8px;margin-bottom:8px;" onclick="event.stopPropagation();">
                 <div style="display:flex;align-items:center;gap:6px;min-height:36px;">
                     <input type="checkbox" style="flex-shrink:0;" ${it.checked ? 'checked' : ''} onchange='templateItemSetChecked(${bidJs},${pathJs},this.checked)' onclick="event.stopPropagation();" />
-                    <input type="text" class="form-control" style="flex:1;min-width:100px;font-size:14px;color:${col};font-weight:${sev ? '600' : '400'};" value="${escapeHtml(it.label)}" onchange='templateItemSetLabel(${bidJs},${pathJs},this.value)' onclick="event.stopPropagation();" />
+                    ${labelCell}
                     <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;" onclick="event.stopPropagation();">
                         <button type="button" title="Add sub-item (under this line)" style="padding:2px 7px;font-size:13px;line-height:1.2;border:1px solid #cfd8dc;border-radius:4px;background:#fafafa;cursor:pointer;" onclick='event.stopPropagation();templateAddChildItem(${bidJs},${pathJs})'>▲</button>
                         <button type="button" title="Remove this line" style="padding:2px 7px;font-size:13px;line-height:1.2;border:1px solid #cfd8dc;border-radius:4px;background:#fafafa;cursor:pointer;" onclick='event.stopPropagation();templateRemoveItem(${bidJs},${pathJs})'>▼</button>
@@ -2452,7 +2481,34 @@ function templateItemSetChecked(blockId, pathStr, checked) {
     renderTemplateTab();
 }
 
+function templateStartEditItemLabel(blockId, pathStr) {
+    templateEditingItemRef = { blockId, path: pathStr };
+    renderTemplateTab();
+    setTimeout(() => {
+        const el = document.getElementById(templateItemLabelInputId(blockId, pathStr));
+        if (el) {
+            el.focus();
+            try {
+                el.select();
+            } catch (e) {
+                /* ignore */
+            }
+        }
+    }, 0);
+}
+
+function templateCancelEditItemLabel() {
+    templateEditingItemRef = null;
+    renderTemplateTab();
+}
+
+function templateFinishEditItemLabel(blockId, pathStr, value) {
+    templateEditingItemRef = null;
+    templateItemSetLabel(blockId, pathStr, value);
+}
+
 function templateItemSetLabel(blockId, pathStr, label) {
+    templateEditingItemRef = null;
     updateData(data => {
         const b = templateFindBlock(data, blockId);
         if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
@@ -2536,7 +2592,34 @@ function templateDeleteBlock(blockId) {
     renderTemplateTab();
 }
 
+function templateStartEditTitle(blockId) {
+    templateEditingTitleBlockId = blockId;
+    renderTemplateTab();
+    setTimeout(() => {
+        const el = document.getElementById(templateTitleInputId(blockId));
+        if (el) {
+            el.focus();
+            try {
+                el.select();
+            } catch (e) {
+                /* ignore */
+            }
+        }
+    }, 0);
+}
+
+function templateCancelEditTitle() {
+    templateEditingTitleBlockId = null;
+    renderTemplateTab();
+}
+
+function templateFinishBlockTitle(blockId, value) {
+    templateEditingTitleBlockId = null;
+    templateSetBlockTitle(blockId, value);
+}
+
 function templateSetBlockTitle(blockId, title) {
+    templateEditingTitleBlockId = null;
     updateData(data => {
         const b = templateFindBlock(data, blockId);
         if (!b || !currentUser || Number(b.created_by) !== Number(currentUser.id)) return;
@@ -2638,6 +2721,12 @@ function renderTemplateTab() {
                         const safe = templateBlockDomSafe(bid);
                         const bidJs = JSON.stringify(bid);
                         const expanded = templateExpandedCardIds.has(String(bid));
+                        const editingTitle =
+                            templateEditingTitleBlockId != null &&
+                            String(templateEditingTitleBlockId) === String(bid);
+                        const titleExpandedField = editingTitle
+                            ? `<input type="text" id="${templateTitleInputId(bid)}" class="form-control" style="margin-top:4px;" value="${escapeHtml(t.title || '')}" onkeydown="if(event.key==='Escape'){event.preventDefault();templateCancelEditTitle();}" onblur='templateFinishBlockTitle(${bidJs}, this.value)' />`
+                            : `<span tabindex="0" style="margin-top:4px;display:block;min-height:38px;padding:8px 12px;border:1px solid #ced4da;border-radius:4px;cursor:text;background:#fff;font-size:16px;line-height:1.4;" title="Double-click to edit" ondblclick='templateStartEditTitle(${bidJs})'>${t.title ? escapeHtml(t.title) : '<span style="color:#bbb;">Untitled</span>'}</span>`;
                         return `
                 <div class="card" style="margin:0;overflow:hidden;border-left:4px solid ${border};">
                     <div style="display:flex;align-items:stretch;gap:8px;">
@@ -2649,7 +2738,7 @@ function renderTemplateTab() {
                     </div>
                     <div id="templateBody_${safe}" style="display:${expanded ? 'block' : 'none'};padding:0 16px 16px 44px;">
                         <label style="display:block;margin-bottom:10px;font-size:13px;color:#555;">Title
-                            <input type="text" class="form-control" style="margin-top:4px;" value="${escapeHtml(t.title || '')}" onchange='templateSetBlockTitle(${bidJs}, this.value)' />
+                            ${titleExpandedField}
                         </label>
                         <div style="display:flex;flex-wrap:nowrap;gap:6px;margin-bottom:12px;align-items:center;overflow-x:auto;-webkit-overflow-scrolling:touch;">
                             <button type="button" class="btn btn-secondary" style="padding:3px 8px;font-size:11px;line-height:1.25;white-space:nowrap;flex-shrink:0;" onclick='templateAddRootItem(${bidJs})'>Add item</button>
@@ -6158,11 +6247,38 @@ function adjustToWorkingDay(date) {
     return adjustToWorkingDayWithHolidayList(date, holidays);
 }
 
+/**
+ * Next Mon–Fri that is not a holiday, searching forward only within the same calendar month.
+ * If none exists in that month, use the last working day of that month (never rolls into the next month).
+ */
+function adjustToWorkingDayWithinMonth(date, holidayDateStrings) {
+    const holidays = Array.isArray(holidayDateStrings) ? holidayDateStrings : [];
+    const y = date.getFullYear();
+    const m = date.getMonth();
+    const lastCalDay = new Date(y, m + 1, 0).getDate();
+    let check = new Date(date);
+    check.setHours(0, 0, 0, 0);
+    for (let day = check.getDate(); day <= lastCalDay; day++) {
+        check.setFullYear(y, m, day);
+        const dow = check.getDay();
+        const ds = formatDateString(check);
+        if (dow !== 0 && dow !== 6 && !holidays.includes(ds)) {
+            return check;
+        }
+    }
+    return getLastWorkingDayOfMonth(y, m);
+}
+
 /** After holidays change, move task due dates that fall on a weekend or listed holiday. */
 function shiftTaskDueFieldsIfNonWorking(data) {
     const hol = (data.holidays || []).map(h => h.date);
+    const monthScopedRecurring = new Set(['monthly', 'quarterly', 'halfyearly', 'yearly']);
     for (const task of data.tasks || []) {
         if (task.removed_at) continue;
+        const useWithinMonth =
+            task.task_type === 'recurring' &&
+            task.frequency &&
+            monthScopedRecurring.has(task.frequency);
         for (const field of ['due_date', 'next_due_date']) {
             const v = task[field];
             if (!v || typeof v !== 'string') continue;
@@ -6174,7 +6290,7 @@ function shiftTaskDueFieldsIfNonWorking(data) {
             const onWeekend = dayOfWeek === 0 || dayOfWeek === 6;
             const onHoliday = hol.includes(v);
             if (onWeekend || onHoliday) {
-                const adj = adjustToWorkingDayWithHolidayList(d, hol);
+                const adj = useWithinMonth ? adjustToWorkingDayWithinMonth(d, hol) : adjustToWorkingDayWithHolidayList(d, hol);
                 task[field] = formatDateString(adj);
             }
         }
@@ -6669,10 +6785,28 @@ function exportRecurringReportToExcel() {
     }
 }
 
+/** Recalculate button: only pending recurring tasks whose due date is today or in the future; skips completed, in process, rejected, not done, etc. */
+function isRecurringTaskEligibleForRecalc(task) {
+    if (!task || task.task_type !== 'recurring' || !task.frequency || task.recurrence_stopped) return false;
+    if (task.removed_at) return false;
+    if (task.rejected_at) return false;
+    const a = task.task_action;
+    if (a === 'completed' || a === 'completed_need_improvement' || a === 'in_process' || a === 'not_done') return false;
+    const dueStr = task.next_due_date || task.due_date;
+    if (!dueStr) return false;
+    const parts = dueStr.split('-');
+    if (parts.length !== 3) return false;
+    const due = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    due.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (due < today) return false;
+    return true;
+}
+
 // Utility function to recalculate due dates for all existing recurring tasks
 // This is useful after fixing the working day calculation logic
 function recalculateAllRecurringDueDates() {
-    const data = getData();
     let updatedCount = 0;
 
     console.log('Starting recalculation of recurring tasks...');
@@ -6680,65 +6814,57 @@ function recalculateAllRecurringDueDates() {
 
     updateData(data => {
         data.tasks.forEach(task => {
-            // Only process recurring tasks with working_day type that are active
-            if (task.task_type === 'recurring' && task.frequency && (task.due_date_type === 'working_day' || task.due_date_type === 'last_working_day')) {
+            if (task.task_type !== 'recurring' || !task.frequency) return;
 
-                // Skip if completed or stopped
-                if (task.task_action === 'completed' || task.recurrence_stopped) {
-                    return;
-                }
+            const dueDateType = task.due_date_type || 'calendar_day';
+            if (!['calendar_day', 'working_day', 'last_working_day'].includes(dueDateType)) return;
 
-                // Validate required fields
-                if (!task.due_day) {
-                    console.log(`Skipping task "${task.task_name}" - missing due_day`);
-                    return;
-                }
+            if (!isRecurringTaskEligibleForRecalc(task)) return;
 
-                // Store the ORIGINAL due_day - we will NOT change this
-                const originalDueDay = task.due_day;
-                const oldDueDate = task.next_due_date || task.due_date;
+            if (dueDateType !== 'last_working_day' && !task.due_day) {
+                console.log(`Skipping task "${task.task_name}" - missing due_day`);
+                return;
+            }
 
-                // Recalculate the next due date using the existing logic
-                let newDueDate;
-                if (task.start_date) {
-                    // Use start_date to recalculate
-                    newDueDate = calculateRecurringDueDate(
-                        task.start_date,
-                        task.frequency,
-                        task.due_date_type,
-                        task.due_day
-                    );
-                } else if (oldDueDate) {
-                    // No start_date, use old due date to calculate next occurrence
-                    newDueDate = calculateRecurringDueDate(
-                        oldDueDate,
-                        task.frequency,
-                        task.due_date_type,
-                        task.due_day
-                    );
+            const originalDueDay = task.due_day;
+            const oldDueDate = task.next_due_date || task.due_date;
+            const dueDayForCalc = dueDateType === 'last_working_day' ? (task.due_day || 1) : task.due_day;
+
+            let newDueDate;
+            if (task.start_date) {
+                newDueDate = calculateRecurringDueDate(
+                    task.start_date,
+                    task.frequency,
+                    dueDateType,
+                    dueDayForCalc
+                );
+            } else if (oldDueDate) {
+                newDueDate = calculateRecurringDueDate(
+                    oldDueDate,
+                    task.frequency,
+                    dueDateType,
+                    dueDayForCalc
+                );
+            } else {
+                console.log(`Skipping task "${task.task_name}" - no start_date or due_date`);
+                return;
+            }
+
+            console.log(`Task "${task.task_name}": DueDay=${task.due_day}, Old=${oldDueDate}, New=${newDueDate}`);
+
+            if (dueDateType !== 'last_working_day' && task.due_day !== originalDueDay) {
+                console.error(`ERROR: due_day was modified! This should never happen!`);
+                task.due_day = originalDueDay;
+            }
+
+            if (newDueDate !== oldDueDate) {
+                if (task.next_due_date) {
+                    task.next_due_date = newDueDate;
                 } else {
-                    console.log(`Skipping task "${task.task_name}" - no start_date or due_date`);
-                    return;
+                    task.due_date = newDueDate;
                 }
-
-                console.log(`Task "${task.task_name}": DueDay=${task.due_day}, Old=${oldDueDate}, New=${newDueDate}`);
-
-                // VERIFY that due_day hasn't changed (safety check)
-                if (task.due_day !== originalDueDay) {
-                    console.error(`ERROR: due_day was modified! This should never happen!`);
-                    task.due_day = originalDueDay; // Restore it
-                }
-
-                // Only update if the date changed
-                if (newDueDate !== oldDueDate) {
-                    if (task.next_due_date) {
-                        task.next_due_date = newDueDate;
-                    } else {
-                        task.due_date = newDueDate;
-                    }
-                    updatedCount++;
-                    console.log(`✓ Updated task "${task.task_name}" from ${oldDueDate} to ${newDueDate} (DueDay=${task.due_day} unchanged)`);
-                }
+                updatedCount++;
+                console.log(`✓ Updated task "${task.task_name}" from ${oldDueDate} to ${newDueDate} (DueDay=${task.due_day} unchanged)`);
             }
         });
     });
@@ -6757,7 +6883,11 @@ function recalculateAllRecurringDueDates() {
 
 // UI handler for the recalculate button
 function recalculateExistingTasks() {
-    if (confirm('This will recalculate the due dates for all existing recurring tasks. Continue?')) {
+    if (
+        confirm(
+            'This will recalculate due dates for pending recurring tasks whose due date is today or later (calendar, working day, or last working day). Completed, in process, rejected, and other closed tasks are skipped. Continue?'
+        )
+    ) {
         const updatedCount = recalculateAllRecurringDueDates();
         const messageEl = document.getElementById('recalculateMessage');
         if (messageEl) {
@@ -8415,11 +8545,12 @@ function removeHoliday(id) {
 function updateMonthFilter() {
     const fromEl = document.getElementById('filterDashboardMonthFrom');
     const toEl = document.getElementById('filterDashboardMonthTo');
+    const saved = getInteractiveDashboardPeriod();
     const today = new Date();
     const currentMonthStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
 
-    if (fromEl && !fromEl.value) fromEl.value = currentMonthStr;
-    if (toEl && !toEl.value) toEl.value = currentMonthStr;
+    if (fromEl && !fromEl.value) fromEl.value = saved.from || currentMonthStr;
+    if (toEl && !toEl.value) toEl.value = saved.to || currentMonthStr;
     if (fromEl && toEl && fromEl.value > toEl.value) toEl.value = fromEl.value;
 
     renderInteractiveDashboard();
