@@ -318,19 +318,24 @@ router.get('/debug-tenant', authMiddleware, async (req, res) => {
 
 router.get('/backup', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin only' });
+    if (!req.user.isMaster) {
+      return res.status(403).json({ error: 'Master account only' });
     }
-    if (req.user.isMaster) {
-      return res.status(403).json({ error: 'Use a tenant admin account for workspace backup' });
+    const raw = req.query.tenantRootUserId;
+    const tenantRoot =
+      raw != null && raw !== '' && !Number.isNaN(Number(raw)) ? Number(raw) : null;
+    if (tenantRoot == null) {
+      return res.status(400).json({
+        error: 'Missing tenantRootUserId',
+        hint: 'Pass ?tenantRootUserId=<account admin user id> for the workspace to export.',
+      });
     }
-    const tenantRoot = resolveTenantRoot(req);
     const ws = await ensureWorkspaceForTenantRoot(tenantRoot);
     if (!ws) {
       return res.status(404).json({ error: 'No workspace' });
     }
     const normalized = normalizeWorkspacePayload(ws.data);
-    normalized.users = await loadTenantUsers(tenantRoot, req.user.userId);
+    normalized.users = await loadTenantUsers(tenantRoot, tenantRoot);
     return res.json({
       version: EXPORT_VERSION,
       exportDate: new Date().toISOString(),
@@ -345,15 +350,21 @@ router.get('/backup', authMiddleware, async (req, res) => {
 
 router.post('/restore', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin only' });
+    if (!req.user.isMaster) {
+      return res.status(403).json({ error: 'Master account only' });
     }
-    if (req.user.isMaster) {
-      return res.status(403).json({ error: 'Use a tenant admin account for restore' });
-    }
-    const tenantRoot = resolveTenantRoot(req);
     const body = req.body || {};
-    const restored = parseWorkspaceRestoreBody(body);
+    const trRaw = body.tenantRootUserId;
+    const tenantRoot =
+      trRaw != null && trRaw !== '' && !Number.isNaN(Number(trRaw)) ? Number(trRaw) : null;
+    if (tenantRoot == null) {
+      return res.status(400).json({
+        error: 'Missing tenantRootUserId',
+        hint: 'Include tenantRootUserId in the JSON body (target workspace / org admin id).',
+      });
+    }
+    const { tenantRootUserId: _drop, ...payloadForParse } = body;
+    const restored = parseWorkspaceRestoreBody(payloadForParse);
     if (!restored.ok) {
       return res.status(400).json({ error: 'Invalid backup payload', details: restored.details });
     }
@@ -383,7 +394,7 @@ router.post('/restore', authMiddleware, async (req, res) => {
       console.error('Restore: user sync error:', syncErr.message);
     }
     const normalized = normalizeWorkspacePayload(ws.data);
-    normalized.users = await loadTenantUsers(tenantRoot, req.user.userId);
+    normalized.users = await loadTenantUsers(tenantRoot, tenantRoot);
     return res.json(normalized);
   } catch (e) {
     console.error(e);

@@ -1397,7 +1397,7 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Management System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v17.2.9</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v17.3.0</span></span>
             </div>
             <div class="header-global-search" style="flex:1;max-width:280px;margin:0 12px;position:relative;">
                 <input type="search" id="globalSearchInput" class="form-control" placeholder="Search tasks, notes, users, version…" autocomplete="off" style="width:100%;" title="Search across the app">
@@ -2233,9 +2233,13 @@
                     </div>
                 </div>
 
-                <div class="card" style="margin-bottom: 20px;" id="settingsDataManagement">
+                <div class="card" style="margin-bottom: 20px; display: none;" id="settingsDataManagement">
                     <h3>Data Management</h3>
                     <p id="settingsDataMgmtNote" style="font-size: 13px; color: #666; margin-bottom: 10px;"></p>
+                    <div id="masterBackupTenantWrap" class="form-group" style="display: none; margin-bottom: 12px;">
+                        <label for="masterBackupTenantSelect">Workspace to backup or restore (account admin / tenant)</label>
+                        <select id="masterBackupTenantSelect" class="form-control" style="max-width: 100%;"></select>
+                    </div>
                     <div style="display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap;">
                         <button type="button" class="btn btn-secondary" id="settingsDataExportBtn" onclick="exportAllData()">Export all data (JSON)</button>
                         <input type="file" id="importFileInput" accept=".json" style="display: none;"
@@ -2272,7 +2276,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">17.2.9</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">17.3.0</span></p>
         </footer>
     </div>
 
@@ -2356,7 +2360,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">17.2.9</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">17.3.0</span></p>
                     </div>
                 </div>
             </div>
@@ -3075,7 +3079,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=17.2.9"></script>
+    <script src="app.js?v=17.3.0"></script>
 </body>
 
 </html>

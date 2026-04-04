@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.9';
+const APP_VERSION = '17.3.0';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -7571,6 +7571,43 @@ async function deleteUser(userId) {
     }
 }
 
+/** Master cloud backup: populate tenant (org owner) dropdown from workspace user list. */
+function hydrateMasterBackupTenantSelect() {
+    const wrap = document.getElementById('masterBackupTenantWrap');
+    const sel = document.getElementById('masterBackupTenantSelect');
+    if (!wrap || !sel) return;
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) {
+        wrap.style.display = 'none';
+        sel.innerHTML = '';
+        return;
+    }
+    const data = getData();
+    const users = data.users || [];
+    const roots = new Map();
+    for (const u of users) {
+        if (!u || u.isMaster) continue;
+        if (u.role === 'admin' && Number(u.id) === Number(u.tenantRootUserId)) {
+            roots.set(Number(u.id), u);
+        }
+    }
+    if (roots.size === 0) {
+        sel.innerHTML = '<option value="">No organisation workspaces found</option>';
+    } else {
+        const opts = [...roots.entries()].sort((a, b) =>
+            String(a[1].name || '').localeCompare(String(b[1].name || ''), undefined, { sensitivity: 'base' })
+        );
+        sel.innerHTML =
+            '<option value="">Select workspace…</option>' +
+            opts
+                .map(
+                    ([id, u]) =>
+                        `<option value="${id}">${escapeHtml(u.name || '')} (${escapeHtml(u.email || '')}) — tenant ${id}</option>`
+                )
+                .join('');
+    }
+    wrap.style.display = 'block';
+}
+
 // Settings
 function renderSettings() {
     if (currentUser.role !== 'admin' && !currentUser.isMaster) return;
@@ -7815,29 +7852,31 @@ function renderSettings() {
     const importBtn = document.getElementById('settingsDataImportBtn');
     const autoWrap = document.getElementById('settingsAutoExportWrap');
     const note = document.getElementById('settingsDataMgmtNote');
+    const masterTenantWrap = document.getElementById('masterBackupTenantWrap');
     if (dataMgmt) {
-        if (isApiMode() && currentUser.isMaster) {
+        if (isApiMode() && currentUser && !currentUser.isMaster) {
             dataMgmt.style.display = 'none';
+            if (masterTenantWrap) masterTenantWrap.style.display = 'none';
+        } else if (isApiMode() && currentUser && currentUser.isMaster) {
+            dataMgmt.style.display = 'block';
+            hydrateMasterBackupTenantSelect();
+            if (exportBtn) exportBtn.textContent = 'Download backup (cloud database)';
+            if (importBtn) importBtn.textContent = 'Restore from backup (cloud)';
+            if (autoWrap) autoWrap.style.display = 'none';
+            if (note) {
+                note.textContent =
+                    'Master only: choose a workspace, then download or restore the cloud database for that tenant.';
+                note.style.display = 'block';
+            }
         } else {
             dataMgmt.style.display = 'block';
-            if (exportBtn) {
-                exportBtn.textContent = isApiMode() && !currentUser.isMaster
-                    ? 'Download backup (cloud database)'
-                    : 'Export all data (JSON)';
-            }
-            if (importBtn) {
-                importBtn.textContent = isApiMode() && !currentUser.isMaster
-                    ? 'Restore from backup (cloud)'
-                    : 'Import data (JSON)';
-            }
-            if (autoWrap) {
-                autoWrap.style.display = isApiMode() ? 'none' : 'block';
-            }
+            if (masterTenantWrap) masterTenantWrap.style.display = 'none';
+            if (exportBtn) exportBtn.textContent = 'Export all data (JSON)';
+            if (importBtn) importBtn.textContent = 'Import data (JSON)';
+            if (autoWrap) autoWrap.style.display = 'block';
             if (note) {
-                note.textContent = isApiMode() && !currentUser.isMaster
-                    ? 'Backup and restore use your workspace on the server (not browser storage).'
-                    : '';
-                note.style.display = note.textContent ? 'block' : 'none';
+                note.textContent = '';
+                note.style.display = 'none';
             }
         }
     }
@@ -9451,18 +9490,24 @@ function exportData(format) {
 
 // Export/Import Functions (export includes IndexedDB attachment blobs for full restore in local mode)
 async function exportAllData() {
-    if (isApiMode() && currentUser && currentUser.role === 'admin' && !currentUser.isMaster) {
+    if (isApiMode() && currentUser && currentUser.isMaster) {
+        const sel = document.getElementById('masterBackupTenantSelect');
+        const tr = sel ? parseInt(sel.value, 10) : NaN;
+        if (Number.isNaN(tr) || tr <= 0) {
+            alert('Select a workspace (tenant) to back up.');
+            return;
+        }
         try {
-            const res = await apiFetch('/api/workspace/backup');
+            const res = await apiFetch('/api/workspace/backup?tenantRootUserId=' + encodeURIComponent(tr));
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                alert(err.error || 'Could not download backup from server.');
+                alert(err.error || err.hint || 'Could not download backup from server.');
                 return;
             }
             const payload = await res.json();
-            const filename = `todo-app-cloud-backup-${formatDateString(new Date())}.json`;
+            const filename = `todo-app-cloud-backup-tenant-${tr}-${formatDateString(new Date())}.json`;
             downloadFile(JSON.stringify(payload, null, 2), filename, 'application/json');
-            alert('✅ Cloud workspace backup downloaded.\n\nFile: ' + filename + '\n\nThis snapshot is stored on the server for your account.');
+            alert('✅ Cloud workspace backup downloaded.\n\nFile: ' + filename);
         } catch (e) {
             reportError(e, 'Cloud backup');
         }
@@ -9594,21 +9639,28 @@ function importAllData(event) {
                 `\nExport Date: ${imported.exportDate || 'Unknown'}`;
 
             if (confirm(summary + '\n\nProceed with import?')) {
-                if (isApiMode() && currentUser && currentUser.role === 'admin' && !currentUser.isMaster) {
+                if (isApiMode() && currentUser && currentUser.isMaster) {
+                    const sel = document.getElementById('masterBackupTenantSelect');
+                    const tr = sel ? parseInt(sel.value, 10) : NaN;
+                    if (Number.isNaN(tr) || tr <= 0) {
+                        alert('Select a workspace (tenant) to restore into.');
+                        event.target.value = '';
+                        return;
+                    }
                     try {
                         const res = await apiFetch('/api/workspace/restore', {
                             method: 'POST',
-                            body: JSON.stringify(imported)
+                            body: JSON.stringify({ ...imported, tenantRootUserId: tr }),
                         });
                         if (!res.ok) {
                             const err = await res.json().catch(() => ({}));
-                            alert(err.error || 'Server restore failed.');
+                            alert(err.error || err.hint || 'Server restore failed.');
                             event.target.value = '';
                             return;
                         }
                         const merged = await res.json();
                         __workspaceCache = merged;
-                        alert('✅ Cloud workspace restored from backup file.\n\nYour session stays active.');
+                        alert('✅ Cloud workspace restored for the selected tenant.\n\nRefresh if views look stale.');
                         event.target.value = '';
                         init();
                     } catch (err) {
