@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.7';
+const APP_VERSION = '17.2.8';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -1283,10 +1283,7 @@ function getNextTaskNumberFromData(data) {
 }
 
 function updatePendingTenantBanner() {
-    const el = document.getElementById('pendingTenantBanner');
-    if (!el) return;
-    const show = isApiMode() && currentUser && !currentUser.isMaster && __pendingTenantLink;
-    el.style.display = show ? 'block' : 'none';
+    /* Banner removed from UI; __pendingTenantLink still blocks sync until user is linked. */
 }
 
 async function linkTenantUserByEmail() {
@@ -7702,6 +7699,7 @@ function renderSettings() {
                         <option value="">5 — Move to account admin…</option>${orgAdminOptsForMaster}
                     </select>
                     <button type="button" class="btn btn-secondary" onclick="masterApiMoveUserOrg()">Apply org</button>
+                    <button type="button" class="btn btn-warning" onclick="masterApiUnlinkFromOrg()" title="Removes the selected user from their organisation (not available for the workspace owner)">5b — De-link from org</button>
                 </div>
                 <div class="form-group" style="margin-bottom:16px;">
                     <label>6 — Assign features (select user above first)</label>
@@ -8336,6 +8334,32 @@ async function masterApiMoveUserOrg() {
             return;
         }
         alert('User moved under that account admin.');
+        await masterRefreshAfterUserChange();
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
+async function masterApiUnlinkFromOrg() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const sel = document.getElementById('masterManageUserId');
+    const uid = sel ? parseInt(sel.value, 10) : NaN;
+    if (Number.isNaN(uid) || uid <= 0) {
+        alert('Select a user.');
+        return;
+    }
+    if (!confirm('Remove this user from their current organisation? They will not receive merged workspace data; they can be linked again later.')) {
+        return;
+    }
+    try {
+        const res = await apiFetch(`/api/master/users/${uid}/unlink-org`, { method: 'POST' });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            alert(j.error || 'Unlink failed');
+            return;
+        }
+        alert(j.message || 'User de-linked from organisation.');
         await masterRefreshAfterUserChange();
     } catch (e) {
         console.error(e);

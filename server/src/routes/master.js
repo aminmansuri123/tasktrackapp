@@ -168,6 +168,55 @@ router.get('/users/:userId/linked-data', authMiddleware, requireMaster, async (r
   }
 });
 
+/** Remove a user or delegated admin from their organisation (no data merge). Cannot unlink the workspace owner. */
+router.post('/users/:userId/unlink-org', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (Number.isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user' });
+    }
+    const target = await User.findOne({ userId });
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (target.isMaster) {
+      return res.status(403).json({ error: 'Cannot modify master account' });
+    }
+
+    const uid = Number(target.userId);
+    const wsAtSelf = await Workspace.findOne({ tenantRootUserId: uid }).select('_id').lean();
+    if (wsAtSelf && target.role === 'admin' && !target.isMaster) {
+      return res.status(400).json({
+        error:
+          'Cannot unlink the account admin that owns this workspace. Delete the user or transfer the organisation first.',
+      });
+    }
+
+    const trRaw = target.tenantRootUserId;
+    const hasTr = trRaw != null && trRaw !== '' && !Number.isNaN(Number(trRaw));
+    const previousOrg = hasTr ? Number(trRaw) : null;
+
+    const update = { tenantRootUserId: null };
+    if (target.role === 'admin' && hasTr && Number(trRaw) !== uid) {
+      update.role = 'user';
+    }
+
+    await User.updateOne({ userId: uid }, { $set: update });
+
+    if (previousOrg != null && Number.isFinite(previousOrg)) {
+      await reconcileWorkspaceEmbeddedUsersForTenant(previousOrg);
+    }
+
+    return res.json({
+      ok: true,
+      message: 'User removed from the organisation. They can be linked again later if needed.',
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Unlink failed' });
+  }
+});
+
 router.delete('/users/:userId', authMiddleware, requireMaster, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId, 10);

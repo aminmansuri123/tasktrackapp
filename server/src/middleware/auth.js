@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Workspace = require('../models/Workspace');
 const { JWT_SECRET } = require('../config');
 const { isProduction } = require('../config');
 const { getSiteSettings } = require('../services/registrationPolicy');
@@ -120,12 +121,34 @@ async function authMiddleware(req, res, next) {
     }
 
     const rawTr = doc.tenantRootUserId;
-    /** Resolved org tenant root for API; null = account user not yet linked to an organisation. */
+    const hasTr = rawTr != null && rawTr !== '' && !Number.isNaN(Number(rawTr));
+    const trNum = hasTr ? Number(rawTr) : null;
+    const uidNum = Number(doc.userId);
+
+    /**
+     * Tenant root for API. null = account user not yet linked.
+     * Admins with a workspace document at their own userId must resolve to that org (fixes bad links
+     * where tenantRootUserId pointed at another id — those users were treated as delegated admins and only saw their own tasks).
+     */
     let tenantRootForReq;
-    if (rawTr != null && rawTr !== '' && !Number.isNaN(Number(rawTr))) {
-      tenantRootForReq = Number(rawTr);
-    } else if (doc.role === 'admin' && !doc.isMaster) {
-      tenantRootForReq = doc.userId;
+    if (doc.role === 'admin' && !doc.isMaster) {
+      if (!hasTr) {
+        tenantRootForReq = uidNum;
+      } else if (trNum === uidNum) {
+        tenantRootForReq = trNum;
+      } else {
+        const ownsWorkspace = await Workspace.findOne({ tenantRootUserId: doc.userId }).select('_id').lean();
+        if (ownsWorkspace) {
+          tenantRootForReq = uidNum;
+          if (trNum !== uidNum) {
+            await User.updateOne({ userId: doc.userId }, { $set: { tenantRootUserId: doc.userId } });
+          }
+        } else {
+          tenantRootForReq = trNum;
+        }
+      }
+    } else if (hasTr) {
+      tenantRootForReq = trNum;
     } else {
       tenantRootForReq = null;
     }
