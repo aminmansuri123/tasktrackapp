@@ -150,6 +150,39 @@ function scopePersonalListsForUser(obj, userId) {
   };
 }
 
+/**
+ * Tenant admin promoted from user (userId !== org tenant root): only their assigned tasks, not the org owner's.
+ */
+function isDelegatedTenantAdmin(req, tenantRoot) {
+  return (
+    req.user.role === 'admin' &&
+    !req.user.isMaster &&
+    Number(req.user.userId) !== Number(tenantRoot)
+  );
+}
+
+/** Merge PUT /workspace tasks so delegated admins cannot drop other users' tasks. */
+function mergeTasksForDelegatedAdmin(existingTasks, incomingTasks, userId) {
+  const uid = Number(userId);
+  const existing = Array.isArray(existingTasks) ? existingTasks : [];
+  const incoming = Array.isArray(incomingTasks) ? incomingTasks : [];
+  const incomingById = new Map(incoming.map((t) => [String(t.id), t]));
+  const merged = existing.map((t) => {
+    const inc = incomingById.get(String(t.id));
+    if (inc && Number(t.assigned_to) === uid) {
+      return { ...t, ...inc, assigned_to: t.assigned_to };
+    }
+    return t;
+  });
+  const existingIds = new Set(existing.map((t) => String(t.id)));
+  for (const inc of incoming) {
+    if (!existingIds.has(String(inc.id)) && Number(inc.assigned_to) === uid) {
+      merged.push(inc);
+    }
+  }
+  return merged;
+}
+
 const emailTaskViewLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -425,6 +458,10 @@ router.get('/', authMiddleware, async (req, res) => {
       }
     }
 
+    if (isDelegatedTenantAdmin(req, tenantRoot) && Array.isArray(normalized.tasks)) {
+      normalized.tasks = normalized.tasks.filter((t) => Number(t.assigned_to) === req.user.userId);
+    }
+
     try {
       const dataToSave = { ...normalized };
       if (Array.isArray(dataToSave.tasks)) {
@@ -502,6 +539,15 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
     }
 
     const merged = { ...incoming };
+    const isDelegatedAdmin = isAdmin && isDelegatedTenantAdmin(req, tenantRoot);
+    if (isDelegatedAdmin) {
+      if (Array.isArray(incoming.tasks)) {
+        merged.tasks = mergeTasksForDelegatedAdmin(existingNormalized.tasks, incoming.tasks, req.user.userId);
+      } else {
+        merged.tasks = existingNormalized.tasks;
+      }
+    }
+
     merged.journal = mergeJournalUserSlice(
       existingNormalized.journal,
       incoming.journal,
@@ -547,24 +593,26 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
         req.user.userId
       );
     } else {
-      try {
-        const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
-        const incomingUsersMerged = await mergeIncomingUsersWithDbTenantRoster(
-          incoming.users,
-          tenantRoot,
-          previousUserIds
-        );
-        await syncUsersFromClientPayload(incomingUsersMerged, { isAdmin: true, tenantRootUserId: tenantRoot });
-        if (Array.isArray(incomingUsersMerged) && incomingUsersMerged.length > 0) {
-          await deleteUsersNotInPayload(
-            incomingUsersMerged.map((u) => u.id),
+      if (!isDelegatedAdmin) {
+        try {
+          const previousUserIds = previousWorkspaceUserIdSet(existingNormalized.users);
+          const incomingUsersMerged = await mergeIncomingUsersWithDbTenantRoster(
+            incoming.users,
             tenantRoot,
-            previousUserIds,
-            false
+            previousUserIds
           );
+          await syncUsersFromClientPayload(incomingUsersMerged, { isAdmin: true, tenantRootUserId: tenantRoot });
+          if (Array.isArray(incomingUsersMerged) && incomingUsersMerged.length > 0) {
+            await deleteUsersNotInPayload(
+              incomingUsersMerged.map((u) => u.id),
+              tenantRoot,
+              previousUserIds,
+              false
+            );
+          }
+        } catch (syncErr) {
+          console.error('PUT /workspace: user sync error (workspace will still save):', syncErr);
         }
-      } catch (syncErr) {
-        console.error('PUT /workspace: user sync error (workspace will still save):', syncErr);
       }
       merged.milestones = mergeArrayByCreatedBy(
         existingNormalized.milestones,

@@ -44,6 +44,10 @@ function cookieOptions() {
 }
 
 function publicUser(u) {
+  const tr =
+    u.tenantRootUserId != null && u.tenantRootUserId !== '' && !Number.isNaN(Number(u.tenantRootUserId))
+      ? Number(u.tenantRootUserId)
+      : Number(u.userId);
   return {
     id: u.userId,
     email: u.email,
@@ -51,6 +55,7 @@ function publicUser(u) {
     role: u.role,
     is_active: u.isActive,
     isMaster: u.isMaster,
+    tenantRootUserId: tr,
     enabledFeatures: Array.isArray(u.enabledFeatures) ? u.enabledFeatures : [],
   };
 }

@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.5';
+const APP_VERSION = '17.2.6';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -716,11 +716,7 @@ function runGlobalSearch(query) {
 
     for (const t of data.tasks || []) {
         if (t.removed_at) continue;
-        const vis =
-            t.assigned_to === currentUser.id ||
-            (t.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin';
-        if (!vis) continue;
+        if (!taskVisibleToCurrentUser(t)) continue;
         const num = t.task_number != null ? String(t.task_number) : '';
         const hay = `${t.task_name || ''} ${t.description || ''} ${num}`.toLowerCase();
         if (hay.includes(q)) add('task', t.id, t.task_name || 'Task', `Task #${num || '—'}`);
@@ -953,6 +949,44 @@ function taskAssigneePickerUsers() {
         return self && self.is_active !== false ? [self] : [];
     }
     return usersVisibleInPickers();
+}
+
+/** Org tenant root id from session or workspace user row (legacy sessions may lack /me field). */
+function resolveTenantRootUserIdClient() {
+    if (!currentUser) return NaN;
+    if (currentUser.tenantRootUserId != null && currentUser.tenantRootUserId !== '') {
+        return Number(currentUser.tenantRootUserId);
+    }
+    try {
+        const data = getData();
+        const self = (data.users || []).find(u => Number(u.id) === Number(currentUser.id));
+        if (self != null && self.tenantRootUserId != null && self.tenantRootUserId !== '') {
+            return Number(self.tenantRootUserId);
+        }
+    } catch (e) {
+        /* ignore */
+    }
+    return Number(currentUser.id);
+}
+
+/**
+ * Tenant admin who is not the org owner (promoted user): must not see the org owner's / other users' tasks.
+ * Org owner: user id === tenantRootUserId (for tenant accounts, not master).
+ */
+function isDelegatedTenantAdmin() {
+    if (!currentUser || currentUser.isMaster || currentUser.role !== 'admin') return false;
+    const tr = resolveTenantRootUserIdClient();
+    return Number(currentUser.id) !== tr;
+}
+
+/** Task list visibility: org-owner admins see all tenant tasks; delegated admins and users only see tasks assigned to them. */
+function taskVisibleToCurrentUser(task) {
+    if (!currentUser || !task) return false;
+    if (currentUser.isMaster) return true;
+    if (currentUser.role === 'admin' && !isDelegatedTenantAdmin()) {
+        return true;
+    }
+    return Number(task.assigned_to) === Number(currentUser.id);
 }
 
 // Utility function to escape CSV values
@@ -2138,11 +2172,7 @@ function switchTab(tabName, eventElement, skipAutoRender = false) {
 
 function taskVisibleForIntelligence(task) {
     if (!task || task.removed_at || !currentUser) return false;
-    return (
-        task.assigned_to === currentUser.id ||
-        (task.is_team_task && currentUser.role === 'admin') ||
-        currentUser.role === 'admin'
-    );
+    return taskVisibleToCurrentUser(task);
 }
 
 function renderIntelligenceTab() {
@@ -2817,8 +2847,9 @@ function renderDashboard() {
 
         // For user statistics: count tasks in selected period for all users (admin sees all, regular users see their own)
         if (taskInSelectedPeriod || !dueDate) {
-            // For admin: show stats for all users; for regular users: only their own tasks
-            const shouldCountForUser = currentUser.role === 'admin' || task.assigned_to === currentUser.id;
+            // Org-owner admin: stats for all users; delegated admins and users: only own assignments
+            const shouldCountForUser =
+                (currentUser.role === 'admin' && !isDelegatedTenantAdmin()) || task.assigned_to === currentUser.id;
 
             if (shouldCountForUser && userStats[task.assigned_to]) {
                 userStats[task.assigned_to].totalAssigned++;
@@ -2834,11 +2865,7 @@ function renderDashboard() {
         }
 
         // For other dashboard stats (today, overdue, etc.), check if task is visible to current user
-        const isAssigned = currentUser.role === 'admin' ||
-            task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin');
-
-        if (!isAssigned) return;
+        if (!taskVisibleToCurrentUser(task)) return;
 
         // Count tasks without due date (exclude Need Improvement and Not Done)
         if (task.task_type === 'without_due_date' &&
@@ -3375,12 +3402,7 @@ function renderOverdueDrilldown() {
         // Check if task date is within the from-to range (when range is set)
         const inRange = !fromDate || !toDate || (taskDate >= fromDate && taskDate <= toDate);
 
-        // Check user permissions
-        const isAssigned = currentUser.role === 'admin' ||
-            task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin');
-
-        return isOverdue && inRange && isAssigned;
+        return isOverdue && inRange && taskVisibleToCurrentUser(task);
     });
 
     // Render the tasks in drilldown
@@ -3834,9 +3856,7 @@ function getTodayTasks(dateStr) {
         const dueDate = task.due_date || task.next_due_date;
         return dueDate === dateStr &&
             !isTaskCompleted(task) &&
-            (task.assigned_to === currentUser.id ||
-                (task.is_team_task && currentUser.role === 'admin') ||
-                currentUser.role === 'admin');
+            taskVisibleToCurrentUser(task);
     });
 }
 
@@ -3868,9 +3888,7 @@ function getOverdueTasks(filterMonth, filterYear) {
         }
 
         return isOverdue &&
-            (task.assigned_to === currentUser.id ||
-                (task.is_team_task && currentUser.role === 'admin') ||
-                currentUser.role === 'admin');
+            taskVisibleToCurrentUser(task);
     });
 }
 
@@ -3887,9 +3905,7 @@ function getCompletedTasks(filterMonth, filterYear) {
         const completedDate = new Date(task.completed_at);
         if (completedDate < thirtyDaysAgo) return false;
 
-        return task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin';
+        return taskVisibleToCurrentUser(task);
     });
 }
 
@@ -3906,9 +3922,7 @@ function getPendingTasks(filterMonth, filterYear) {
         if (task.task_action === 'not_done') return false; // Not Done is closed
 
         // Return all pending tasks regardless of due date period
-        return (task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin');
+        return taskVisibleToCurrentUser(task);
     });
 }
 
@@ -3931,9 +3945,7 @@ function getPendingTasksByPeriod(filterMonth, filterYear, toMonth, toYear) {
         taskDate.setHours(0, 0, 0, 0);
 
         return taskDate >= fromDate && taskDate <= toDate &&
-            (task.assigned_to === currentUser.id ||
-                (task.is_team_task && currentUser.role === 'admin') ||
-                currentUser.role === 'admin');
+            taskVisibleToCurrentUser(task);
     });
 }
 
@@ -3944,9 +3956,7 @@ function getNoDueDateTasks() {
             !isTaskCompleted(task) &&
             task.task_action !== 'not_done' &&
             !task.removed_at && // Exclude removed tasks
-            (task.assigned_to === currentUser.id ||
-                (task.is_team_task && currentUser.role === 'admin') ||
-                currentUser.role === 'admin');
+            taskVisibleToCurrentUser(task);
     });
 }
 
@@ -3969,13 +3979,9 @@ function getWorkPlanTasks(filterMonth, filterYear, toMonth, toYear) {
             const taskDate = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
             taskDate.setHours(0, 0, 0, 0);
             return taskDate >= fromDate && taskDate <= toDate &&
-                (task.assigned_to === currentUser.id ||
-                    (task.is_team_task && currentUser.role === 'admin') ||
-                    currentUser.role === 'admin');
+                taskVisibleToCurrentUser(task);
         }
-        return task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin';
+        return taskVisibleToCurrentUser(task);
     });
 }
 
@@ -3998,13 +4004,9 @@ function getAuditPointTasks(filterMonth, filterYear, toMonth, toYear) {
             const taskDate = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
             taskDate.setHours(0, 0, 0, 0);
             return taskDate >= fromDate && taskDate <= toDate &&
-                (task.assigned_to === currentUser.id ||
-                    (task.is_team_task && currentUser.role === 'admin') ||
-                    currentUser.role === 'admin');
+                taskVisibleToCurrentUser(task);
         }
-        return task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin';
+        return taskVisibleToCurrentUser(task);
     });
 }
 
@@ -4027,9 +4029,7 @@ function getAdminReviewTasks(filterMonth, filterYear) {
             }
         }
 
-        return task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin';
+        return taskVisibleToCurrentUser(task);
     });
 }
 
@@ -4175,11 +4175,7 @@ function filterTasks() {
     }
 
     let filteredTasks = data.tasks.filter(task => {
-        const isAssigned = task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin';
-
-        if (!isAssigned) return false;
+        if (!taskVisibleToCurrentUser(task)) return false;
         if (statusFilter && task.task_action !== statusFilter) return false;
         if (typeFilter && task.task_type !== typeFilter) return false;
         if (teamFilter === 'self' && (task.is_team_task || task.assigned_to !== currentUser.id)) return false;
@@ -4296,9 +4292,7 @@ function filterTasksByDate(dateStr) {
         const dueDate = task.due_date || task.next_due_date;
         return dueDate === dateStr &&
             !isTaskCompleted(task) &&
-            (task.assigned_to === currentUser.id ||
-                (task.is_team_task && currentUser.role === 'admin') ||
-                currentUser.role === 'admin');
+            taskVisibleToCurrentUser(task);
     });
 
     const dateParts = dateStr.split('-');
@@ -4363,9 +4357,7 @@ function filterTasksByOverdue() {
         if (fromDate && toDate && (taskDate < fromDate || taskDate > toDate)) return false;
 
         return isOverdue &&
-            (task.assigned_to === currentUser.id ||
-                (task.is_team_task && currentUser.role === 'admin') ||
-                currentUser.role === 'admin');
+            taskVisibleToCurrentUser(task);
     });
 
     // Store filtered tasks for export
@@ -5306,9 +5298,7 @@ function filterTasksByAdminReview() {
             } else return false;
         }
 
-        return (task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin');
+        return taskVisibleToCurrentUser(task);
     });
 
     // Store filtered tasks for export
@@ -6630,7 +6620,7 @@ function renderRecurringReport() {
     const baseRecurring = data.tasks.filter(t =>
         t.task_type === 'recurring' &&
         t.start_date &&
-        (currentUser.role === 'admin' || t.assigned_to === currentUser.id)
+        taskVisibleToCurrentUser(t)
     );
 
     if (baseRecurring.length === 0) {
@@ -7169,11 +7159,16 @@ function saveCalendarTaskFilter() {
 }
 
 function calendarTaskFilterPredicate(task) {
+    if (!taskVisibleToCurrentUser(task)) return false;
     const mode = getCalendarTaskFilter();
     if (mode === 'all') return true;
-    if (mode === 'self') return task.assigned_to === currentUser.id;
-    if (mode === 'team') return task.assigned_to === currentUser.id || task.is_team_task;
-    return task.assigned_to === currentUser.id;
+    const mine = Number(task.assigned_to) === Number(currentUser.id);
+    if (mode === 'self') return mine;
+    if (mode === 'team') {
+        if (isDelegatedTenantAdmin()) return mine;
+        return mine || !!task.is_team_task;
+    }
+    return mine;
 }
 
 // Calendar
@@ -8817,10 +8812,7 @@ function renderInteractiveDashboard() {
         }
 
         // Visibility check
-        const isAssigned = task.assigned_to === currentUser.id ||
-            (task.is_team_task && currentUser.role === 'admin') ||
-            currentUser.role === 'admin';
-        return isAssigned;
+        return taskVisibleToCurrentUser(task);
     });
 
     // Sort tasks
@@ -9042,9 +9034,7 @@ function exportInteractiveDashboardCSVByDateRange() {
         taskDate.setHours(0, 0, 0, 0);
 
         return taskDate >= fromDateObj && taskDate <= toDateObj &&
-            (task.assigned_to === currentUser.id ||
-                (task.is_team_task && currentUser.role === 'admin') ||
-                currentUser.role === 'admin');
+            taskVisibleToCurrentUser(task);
     });
 
     if (filteredTasks.length === 0) {
