@@ -120,18 +120,21 @@ async function authMiddleware(req, res, next) {
     }
 
     const rawTr = doc.tenantRootUserId;
-    let tenantRoot;
+    /** Resolved org tenant root for API; null = account user not yet linked to an organisation. */
+    let tenantRootForReq;
     if (rawTr != null && rawTr !== '' && !Number.isNaN(Number(rawTr))) {
-      tenantRoot = Number(rawTr);
+      tenantRootForReq = Number(rawTr);
+    } else if (doc.role === 'admin' && !doc.isMaster) {
+      tenantRootForReq = doc.userId;
     } else {
-      tenantRoot = doc.userId;
+      tenantRootForReq = null;
     }
 
     req.user = {
       userId: doc.userId,
       role: doc.role,
       isMaster: !!doc.isMaster,
-      tenantRootUserId: tenantRoot,
+      tenantRootUserId: tenantRootForReq,
     };
     req.sessionIdleTimeoutMinutes = sess.sessionIdleTimeoutMinutes;
     next();

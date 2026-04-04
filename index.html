@@ -1397,7 +1397,7 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Management System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v12.0.8</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v17.2.7</span></span>
             </div>
             <div class="header-global-search" style="flex:1;max-width:280px;margin:0 12px;position:relative;">
                 <input type="search" id="globalSearchInput" class="form-control" placeholder="Search tasks, notes, users, version…" autocomplete="off" style="width:100%;" title="Search across the app">
@@ -1431,6 +1431,9 @@
         </div>
 
         <div class="content">
+            <div id="pendingTenantBanner" style="display:none;margin:0 0 16px;padding:12px 14px;background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;color:#1565c0;font-size:14px;line-height:1.45;">
+                <strong>Account not linked yet.</strong> Your admin can add your email under <strong>Settings → Link account user</strong> so you can use the shared workspace. Until then, task data stays private to this login.
+            </div>
             <!-- Dashboard Tab -->
             <div id="dashboard" class="tab-content active">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -2129,6 +2132,18 @@
             <div id="settings" class="tab-content">
                 <h2>Settings</h2>
 
+                <div id="linkTenantUserCard" class="card" style="margin-bottom: 20px; display: none;">
+                    <h3>Link account user</h3>
+                    <p style="color:#666;font-size:13px;line-height:1.55;margin-bottom:10px;">
+                        If someone registered as <strong>Account user</strong> without being linked yet, enter their email here to attach them to <em>your</em> workspace for assigning tasks. Their existing private data is not merged — only membership changes.
+                    </p>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+                        <input type="email" id="linkUserByEmailInput" class="form-control" placeholder="user@company.com" style="min-width:220px;max-width:100%;" autocomplete="off">
+                        <button type="button" class="btn btn-primary" onclick="linkTenantUserByEmail()">Link user</button>
+                    </div>
+                    <p id="linkUserByEmailMsg" style="margin-top:10px;font-size:13px;color:#333;"></p>
+                </div>
+
                 <div id="tenantReportToCard" class="card" style="margin-bottom: 20px; display: none;">
                     <h3>Report to (task dropdown options)</h3>
                     <p style="color:#666;font-size:13px;line-height:1.55;margin-bottom:10px;">
@@ -2147,7 +2162,7 @@
                         <button type="button" class="btn btn-primary" id="settingsAddUserBtn" onclick="openUserModal()">+ Add User</button>
                     </div>
                     <p style="color:#666;font-size:13px;margin-bottom:12px;line-height:1.55;">
-                        <span class="storage-hint-cloud"><strong>How accounts work:</strong> “Create account” can register an <strong>account admin</strong> (new workspace) or an <strong>account user</strong> under an existing admin. Admins assign tasks to users in your org list. Regular users only assign tasks to themselves.</span>
+                        <span class="storage-hint-cloud"><strong>How accounts work:</strong> “Create account” can register an <strong>account admin</strong> (new workspace) or an <strong>account user</strong> (they can sign up first; you link them by email below when ready). Admins assign tasks to users in your org list. Regular users only assign tasks to themselves.</span>
                         <span class="storage-hint-local"><strong>Local mode:</strong> Without an API URL in <code>config.js</code>, data stays in this browser. Use “Create account” for a local admin, then add users here.</span>
                     </p>
                     <div id="masterUserMgmtFilterWrap" class="form-group hidden" style="margin-bottom:12px;">
@@ -2260,7 +2275,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">12.0.8</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">17.2.7</span></p>
         </footer>
     </div>
 
@@ -2293,7 +2308,7 @@
                     <div id="loginTabsRow" class="login-segment" role="tablist">
                         <button type="button" id="loginTabSignin" class="active" aria-selected="true">Sign in</button>
                         <button type="button" id="loginTabRegister" aria-selected="false">Create account</button>
-                        <button type="button" id="loginTabMaster" aria-selected="false">Master</button>
+                        <button type="button" id="loginTabMaster" class="hidden" style="display:none !important;" aria-hidden="true" tabindex="-1" aria-selected="false">Master</button>
                     </div>
                     <div id="loginNameGroup" class="form-group hidden">
                         <label for="loginName">Name</label>
@@ -2312,6 +2327,7 @@
                             <option value="">Select an admin…</option>
                         </select>
                     </div>
+                    <p id="masterLoginHint" style="display:none;margin:0 0 10px;font-size:13px;color:#1565c0;line-height:1.4;">This address signs in to <strong>master</strong> tools (cross-tenant). Use your normal password.</p>
                     <div class="form-group">
                         <label for="loginEmail">Email</label>
                         <input type="email" class="form-control" id="loginEmail" name="email" placeholder="you@company.com" autocomplete="username" required>
@@ -2343,7 +2359,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">12.0.8</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">17.2.7</span></p>
                     </div>
                 </div>
             </div>
@@ -3062,7 +3078,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=12.0.8"></script>
+    <script src="app.js?v=17.2.7"></script>
 </body>
 
 </html>

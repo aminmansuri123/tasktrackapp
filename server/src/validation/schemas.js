@@ -24,26 +24,13 @@ const loginBodySchema = z.object({
   password: z.string().min(1).max(500),
 });
 
-const registerBodySchema = z
-  .object({
-    name: z.string().trim().min(1).max(200),
-    email: z.string().trim().email().max(320),
-    password: z.string().min(6).max(500),
-    accountType: z.enum(['team_user', 'org_admin']).optional(),
-    orgAdminUserId: z.union([z.number().int().positive(), z.string()]).optional(),
-  })
-  .superRefine((data, ctx) => {
-    if (data.accountType === 'team_user') {
-      const raw = data.orgAdminUserId;
-      if (raw === undefined || raw === null || raw === '') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'orgAdminUserId is required when accountType is team_user',
-          path: ['orgAdminUserId'],
-        });
-      }
-    }
-  });
+const registerBodySchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  email: z.string().trim().email().max(320),
+  password: z.string().min(6).max(500),
+  accountType: z.enum(['team_user', 'org_admin']).optional(),
+  orgAdminUserId: z.union([z.number().int().positive(), z.string()]).optional(),
+});
 
 const forgotPasswordRequestSchema = z.object({
   email: z.string().trim().email().max(320),

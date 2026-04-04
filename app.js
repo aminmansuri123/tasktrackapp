@@ -1,4 +1,4 @@
-const APP_VERSION = '17.2.6';
+const APP_VERSION = '17.2.7';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -142,6 +142,7 @@ function hydrateLastLoginEmail() {
         if (!el || el.value) return;
         const v = localStorage.getItem(LAST_LOGIN_EMAIL_KEY);
         if (v) el.value = v;
+        updateMasterLoginHint();
     } catch {
         /* ignore */
     }
@@ -215,6 +216,8 @@ const WORKSPACE_PUSH_DEBOUNCE_MS = 400;
 /** ISO timestamp from last workspace GET/PUT (tenant sync across tabs/devices). */
 let __workspaceRemoteUpdatedAt = null;
 let __workspacePollTimer = null;
+/** True when account user is registered but not yet linked to an org (server sends _pendingTenantLink). */
+let __pendingTenantLink = false;
 
 function isApiMode() {
     return typeof window.API_BASE_URL === 'string' && window.API_BASE_URL.trim().length > 0;
@@ -381,6 +384,8 @@ async function apiPullWorkspace() {
         throw new Error('Failed to load workspace');
     }
     const body = await res.json();
+    __pendingTenantLink = !!body._pendingTenantLink;
+    delete body._pendingTenantLink;
     if (body._debug) {
         console.log('[workspace _debug]', JSON.stringify(body._debug));
     }
@@ -390,16 +395,17 @@ async function apiPullWorkspace() {
     delete body._workspaceUpdatedAt;
     __workspaceCache = normalizeData(body);
     applyFeatureTabVisibility();
+    updatePendingTenantBanner();
 }
 
 function scheduleWorkspacePush() {
-    if (!isApiMode() || !currentUser || currentUser.isMaster) return;
+    if (!isApiMode() || !currentUser || currentUser.isMaster || __pendingTenantLink) return;
     clearTimeout(__workspacePushTimer);
     __workspacePushTimer = setTimeout(() => flushWorkspaceToApi(), WORKSPACE_PUSH_DEBOUNCE_MS);
 }
 
 async function putWorkspaceCacheToServer() {
-    if (!isApiMode() || !__workspaceCache) return false;
+    if (!isApiMode() || !__workspaceCache || !currentUser || currentUser.isMaster || __pendingTenantLink) return false;
     const genAtPutStart = __workspaceMutationGen;
     __lastWorkspacePutError = '';
     try {
@@ -444,26 +450,26 @@ async function putWorkspaceCacheToServer() {
 }
 
 async function flushWorkspaceToApi() {
-    if (!isApiMode() || !currentUser || currentUser.isMaster || !__workspaceCache) return;
+    if (!isApiMode() || !currentUser || currentUser.isMaster || !__workspaceCache || __pendingTenantLink) return;
     await putWorkspaceCacheToServer();
 }
 
 /** Immediate PUT (used after import) while session cookie is still valid. Cancels debounced push. */
 async function flushWorkspaceToApiNow() {
-    if (!isApiMode() || !currentUser || currentUser.isMaster || !__workspaceCache) return false;
+    if (!isApiMode() || !currentUser || currentUser.isMaster || !__workspaceCache || __pendingTenantLink) return false;
     clearTimeout(__workspacePushTimer);
     __workspacePushTimer = null;
     return putWorkspaceCacheToServer();
 }
 
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && isApiMode() && currentUser && !currentUser.isMaster) {
+    if (document.visibilityState === 'hidden' && isApiMode() && currentUser && !currentUser.isMaster && !__pendingTenantLink) {
         flushWorkspaceToApi();
     }
 });
 
 window.addEventListener('pagehide', () => {
-    if (isApiMode() && currentUser && !currentUser.isMaster && __workspaceCache) {
+    if (isApiMode() && currentUser && !currentUser.isMaster && __workspaceCache && !__pendingTenantLink) {
         void flushWorkspaceToApiNow();
     }
 });
@@ -951,9 +957,12 @@ function taskAssigneePickerUsers() {
     return usersVisibleInPickers();
 }
 
-/** Org tenant root id from session or workspace user row (legacy sessions may lack /me field). */
+/** Org tenant root id from session or workspace user row (legacy sessions may lack /me field). Null = account user not linked yet. */
 function resolveTenantRootUserIdClient() {
     if (!currentUser) return NaN;
+    if (currentUser.role === 'user' && (currentUser.tenantRootUserId === null || currentUser.tenantRootUserId === undefined)) {
+        return null;
+    }
     if (currentUser.tenantRootUserId != null && currentUser.tenantRootUserId !== '') {
         return Number(currentUser.tenantRootUserId);
     }
@@ -976,7 +985,8 @@ function resolveTenantRootUserIdClient() {
 function isDelegatedTenantAdmin() {
     if (!currentUser || currentUser.isMaster || currentUser.role !== 'admin') return false;
     const tr = resolveTenantRootUserIdClient();
-    return Number(currentUser.id) !== tr;
+    if (tr == null || Number.isNaN(Number(tr))) return false;
+    return Number(currentUser.id) !== Number(tr);
 }
 
 /** Task list visibility: org-owner admins see all tenant tasks; delegated admins and users only see tasks assigned to them. */
@@ -1272,6 +1282,48 @@ function getNextTaskNumberFromData(data) {
     return nums.length ? Math.max(...nums) + 1 : 1;
 }
 
+function updatePendingTenantBanner() {
+    const el = document.getElementById('pendingTenantBanner');
+    if (!el) return;
+    const show = isApiMode() && currentUser && !currentUser.isMaster && __pendingTenantLink;
+    el.style.display = show ? 'block' : 'none';
+}
+
+async function linkTenantUserByEmail() {
+    const input = document.getElementById('linkUserByEmailInput');
+    const msg = document.getElementById('linkUserByEmailMsg');
+    if (!input || !isApiMode() || !currentUser || currentUser.role !== 'admin' || currentUser.isMaster) return;
+    const email = String(input.value || '').trim().toLowerCase();
+    if (!email) {
+        if (msg) msg.textContent = 'Enter an email address.';
+        return;
+    }
+    if (msg) msg.textContent = '';
+    try {
+        const res = await apiFetch('/api/workspace/link-user-by-email', {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            if (msg) msg.textContent = j.error || `Failed (${res.status})`;
+            return;
+        }
+        if (msg) msg.textContent = j.message || 'Linked successfully.';
+        input.value = '';
+        try {
+            await apiPullWorkspace();
+        } catch (e) {
+            console.error(e);
+        }
+        renderUsers();
+        renderSettings();
+    } catch (e) {
+        console.error(e);
+        if (msg) msg.textContent = 'Network error.';
+    }
+}
+
 // Authentication
 function checkAuth() {
     const user = sessionStorage.getItem('currentUser');
@@ -1298,6 +1350,7 @@ function checkAuth() {
         const cpBtn = document.getElementById('changePasswordBtn');
         if (cpBtn) cpBtn.style.display = isApiMode() ? 'inline-block' : 'none';
         applyFeatureTabVisibility();
+        updatePendingTenantBanner();
         startClientIdleWatch();
         startWorkspacePoll();
     } else {
@@ -1500,11 +1553,6 @@ function setLoginPanelMode(mode) {
             tReg.classList.add('active');
             tReg.setAttribute('aria-selected', 'true');
         }
-        if (isApiMode()) {
-            void loadOrgAdminsForRegisterDropdown();
-        } else {
-            loadLocalOrgAdminsForRegisterDropdown();
-        }
         updateLoginRegistrationFieldsVisibility();
     } else if (mode === 'master') {
         if (nameGroup) nameGroup.classList.add('hidden');
@@ -1527,6 +1575,7 @@ function setLoginPanelMode(mode) {
     }
     applyLoginForgotChrome();
     updateLoginScreenCopy();
+    updateMasterLoginHint();
 }
 
 function updateLoginScreenCopy() {
@@ -1540,7 +1589,7 @@ function updateLoginScreenCopy() {
     if (isApiMode()) {
         const mode = (modal && modal.getAttribute('data-login-mode')) || 'signin';
         if (mode === 'register') {
-            sub.textContent = 'Account admin creates a new workspace; account user joins an existing admin.';
+            sub.textContent = 'Account admin creates a new workspace. Account users can register first; an admin links them by email in Settings when ready.';
         } else if (mode === 'master') {
             sub.textContent = 'Master sign-in for cross-tenant support tools only.';
         } else {
@@ -1560,6 +1609,19 @@ function submitLoginPanel() {
     } else {
         login();
     }
+}
+
+function updateMasterLoginHint() {
+    const hint = document.getElementById('masterLoginHint');
+    const em = document.getElementById('loginEmail');
+    const modal = document.getElementById('loginModal');
+    if (!hint || !em || !modal) return;
+    const mode = modal.getAttribute('data-login-mode') || 'signin';
+    const show =
+        mode === 'signin' &&
+        isApiMode() &&
+        em.value.trim().toLowerCase() === MASTER_ACCOUNT_EMAIL;
+    hint.style.display = show ? 'block' : 'none';
 }
 
 /** Wire login UI without inline onclick (avoids ReferenceError on some static hosts / cached HTML+JS mismatches). */
@@ -1595,21 +1657,19 @@ function wireLoginScreenControls() {
     };
     const loginEmail = document.getElementById('loginEmail');
     const loginPassword = document.getElementById('loginPassword');
-    if (loginEmail) loginEmail.addEventListener('keydown', onLoginFieldKey);
+    if (loginEmail) {
+        loginEmail.addEventListener('keydown', onLoginFieldKey);
+        loginEmail.addEventListener('input', updateMasterLoginHint);
+        loginEmail.addEventListener('blur', updateMasterLoginHint);
+    }
     if (loginPassword) loginPassword.addEventListener('keydown', onLoginFieldKey);
 }
 
 function updateLoginRegistrationFieldsVisibility() {
     const modal = document.getElementById('loginModal');
     if (!modal || modal.getAttribute('data-login-mode') !== 'register') return;
-    const typeEl = document.getElementById('loginAccountType');
     const oag = document.getElementById('loginOrgAdminGroup');
-    if (!oag || !typeEl) return;
-    if (typeEl.value === 'team_user') {
-        oag.classList.remove('hidden');
-    } else {
-        oag.classList.add('hidden');
-    }
+    if (oag) oag.classList.add('hidden');
 }
 
 function loadLocalOrgAdminsForRegisterDropdown() {
@@ -1801,16 +1861,14 @@ async function register() {
     if (accountType === 'team_user') {
         const sel = document.getElementById('loginOrgAdminSelect');
         orgAdminUserId = sel ? parseInt(sel.value, 10) : NaN;
-        if (Number.isNaN(orgAdminUserId) || orgAdminUserId <= 0) {
-            showError('loginError', 'Select an account admin for account user signup.');
-            return;
-        }
     }
 
     if (isApiMode()) {
         let res;
         const regBody = { name, email, password, accountType };
-        if (accountType === 'team_user') regBody.orgAdminUserId = orgAdminUserId;
+        if (accountType === 'team_user' && Number.isFinite(orgAdminUserId) && orgAdminUserId > 0) {
+            regBody.orgAdminUserId = orgAdminUserId;
+        }
         try {
             res = await apiFetch('/api/auth/register', {
                 method: 'POST',
@@ -1917,21 +1975,33 @@ async function register() {
 
     let newUser;
     if (accountType === 'team_user') {
-        const adminUser = data.users.find(u =>
-            Number(u.id) === orgAdminUserId && u.role === 'admin' && !isMasterUserRecord(u));
-        if (!adminUser) {
-            showError('loginError', 'Invalid account admin.');
-            return;
+        if (Number.isFinite(orgAdminUserId) && orgAdminUserId > 0) {
+            const adminUser = data.users.find(u =>
+                Number(u.id) === orgAdminUserId && u.role === 'admin' && !isMasterUserRecord(u));
+            if (!adminUser) {
+                showError('loginError', 'Invalid account admin.');
+                return;
+            }
+            newUser = {
+                id: Date.now(),
+                name,
+                email,
+                password,
+                role: 'user',
+                is_active: true,
+                tenant_root_id: Number(adminUser.id)
+            };
+        } else {
+            newUser = {
+                id: Date.now(),
+                name,
+                email,
+                password,
+                role: 'user',
+                is_active: true,
+                tenant_root_id: null
+            };
         }
-        newUser = {
-            id: Date.now(),
-            name,
-            email,
-            password,
-            role: 'user',
-            is_active: true,
-            tenant_root_id: Number(adminUser.id)
-        };
     } else {
         newUser = {
             id: Date.now(),
@@ -1957,6 +2027,7 @@ async function register() {
 
 window.setLoginPanelMode = setLoginPanelMode;
 window.submitLoginPanel = submitLoginPanel;
+window.linkTenantUserByEmail = linkTenantUserByEmail;
 window.openChangePasswordModal = openChangePasswordModal;
 window.closeChangePasswordModal = closeChangePasswordModal;
 window.submitChangePassword = submitChangePassword;
@@ -2027,6 +2098,7 @@ async function logout() {
         clearPendingPasswordsForSync();
     }
     __workspaceRemoteUpdatedAt = null;
+    __pendingTenantLink = false;
     clearApiAuthToken();
     sessionStorage.removeItem('currentUser');
     sessionStorage.removeItem('interactiveDashboardFiltersInit');
@@ -7675,6 +7747,17 @@ function renderSettings() {
         } else {
             masterSec.style.display = 'none';
             masterSec.innerHTML = '';
+        }
+    }
+
+    const linkTenantCard = document.getElementById('linkTenantUserCard');
+    if (linkTenantCard) {
+        if (isApiMode() && currentUser.role === 'admin' && !currentUser.isMaster) {
+            linkTenantCard.style.display = 'block';
+            const lum = document.getElementById('linkUserByEmailMsg');
+            if (lum) lum.textContent = '';
+        } else {
+            linkTenantCard.style.display = 'none';
         }
     }
 

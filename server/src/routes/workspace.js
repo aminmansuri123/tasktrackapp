@@ -204,7 +204,7 @@ function resolveTenantRoot(req) {
   if (tr != null && !Number.isNaN(Number(tr))) {
     return Number(tr);
   }
-  return Number(req.user.userId);
+  return null;
 }
 
 /** Whether user doc belongs to this tenant workspace (member, org owner, or shared-in). */
@@ -397,6 +397,9 @@ router.get('/updated-at', authMiddleware, async (req, res) => {
       return res.json({ updatedAt: null });
     }
     const tenantRoot = resolveTenantRoot(req);
+    if (tenantRoot == null) {
+      return res.json({ updatedAt: null });
+    }
     const ws = await Workspace.findOne({ tenantRootUserId: tenantRoot }).select('updatedAt').lean();
     if (!ws || !ws.updatedAt) {
       return res.json({ updatedAt: null });
@@ -405,6 +408,51 @@ router.get('/updated-at', authMiddleware, async (req, res) => {
   } catch (e) {
     console.error('GET /workspace/updated-at', e);
     return res.status(500).json({ error: 'Failed' });
+  }
+});
+
+/** Tenant admin: attach a registered account user (no org yet) by email — task assignment only; no data merge. */
+router.post('/link-user-by-email', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.isMaster) {
+      return res.status(403).json({ error: 'Use a tenant admin account' });
+    }
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin only' });
+    }
+    const tenantRoot = resolveTenantRoot(req);
+    if (tenantRoot == null) {
+      return res.status(403).json({ error: 'No organisation context' });
+    }
+    const email = String(req.body?.email || '')
+      .toLowerCase()
+      .trim();
+    if (!email) {
+      return res.status(400).json({ error: 'Email required' });
+    }
+    const target = await User.findOne({ email }).lean();
+    if (!target) {
+      return res.status(404).json({ error: 'No account with that email' });
+    }
+    if (target.isMaster) {
+      return res.status(400).json({ error: 'Invalid target' });
+    }
+    if (Number(target.userId) === Number(req.user.userId)) {
+      return res.status(400).json({ error: 'Cannot link yourself' });
+    }
+    const tr = target.tenantRootUserId;
+    const hasRoot = tr != null && tr !== '' && !Number.isNaN(Number(tr));
+    if (hasRoot) {
+      if (Number(tr) === Number(tenantRoot)) {
+        return res.json({ ok: true, message: 'User is already in this organisation' });
+      }
+      return res.status(400).json({ error: 'That user already belongs to another organisation' });
+    }
+    await User.updateOne({ userId: target.userId }, { $set: { tenantRootUserId: tenantRoot } });
+    return res.json({ ok: true, message: 'User linked. They can refresh or sign in again to load your workspace.' });
+  } catch (e) {
+    console.error('POST /workspace/link-user-by-email', e);
+    return res.status(500).json({ error: 'Failed to link user' });
   }
 });
 
@@ -417,6 +465,40 @@ router.get('/', authMiddleware, async (req, res) => {
     }
 
     const tenantRoot = resolveTenantRoot(req);
+    if (tenantRoot == null) {
+      if (req.user.role === 'user') {
+        const udoc = await User.findOne({ userId: req.user.userId }).lean();
+        if (!udoc) {
+          return res.status(401).json({ error: 'User not found' });
+        }
+        const shell = defaultWorkspaceData();
+        shell.tasks = [];
+        shell.locations = [];
+        shell.holidays = [];
+        shell.milestones = [];
+        shell.notes = [];
+        shell.learningNotes = [];
+        shell.dailyPlanner = [];
+        shell.codeSnippets = [];
+        shell.templateBlocks = [];
+        shell.users = [
+          {
+            id: udoc.userId,
+            email: udoc.email,
+            name: udoc.name,
+            role: udoc.role,
+            is_active: udoc.isActive,
+            isMaster: false,
+            enabledFeatures: Array.isArray(udoc.enabledFeatures) ? udoc.enabledFeatures : [],
+            last_login_at: formatLastLoginAtDisplay(udoc.lastLoginAt),
+          },
+        ];
+        shell._pendingTenantLink = true;
+        return res.json(shell);
+      }
+      return res.status(403).json({ error: 'No organisation workspace for this account', code: 'NO_TENANT' });
+    }
+
     console.log(`GET /workspace uid=${req.user.userId} tenantRoot=${tenantRoot}`);
 
     const ws = await ensureWorkspaceForTenantRoot(tenantRoot);
@@ -509,6 +591,13 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
   try {
     if (req.user.isMaster) {
       return res.status(403).json({ error: 'Master account cannot modify workspace data' });
+    }
+
+    if (resolveTenantRoot(req) == null) {
+      return res.status(403).json({
+        error: 'Account not linked to an organisation yet. Ask your administrator to add your email under Settings.',
+        code: 'NO_TENANT',
+      });
     }
 
     const doc = await User.findOne({ userId: req.user.userId });

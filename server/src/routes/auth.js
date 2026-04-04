@@ -44,10 +44,12 @@ function cookieOptions() {
 }
 
 function publicUser(u) {
-  const tr =
-    u.tenantRootUserId != null && u.tenantRootUserId !== '' && !Number.isNaN(Number(u.tenantRootUserId))
-      ? Number(u.tenantRootUserId)
-      : Number(u.userId);
+  let tr = null;
+  if (u.tenantRootUserId != null && u.tenantRootUserId !== '' && !Number.isNaN(Number(u.tenantRootUserId))) {
+    tr = Number(u.tenantRootUserId);
+  } else if (u.role === 'admin' && !u.isMaster) {
+    tr = Number(u.userId);
+  }
   return {
     id: u.userId,
     email: u.email,
@@ -151,39 +153,52 @@ router.post('/register', validateBody(registerBodySchema), async (req, res) => {
     let doc;
     if (accountType === 'team_user') {
       const raw = req.body.orgAdminUserId;
-      const pickerId = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
-      if (Number.isNaN(pickerId)) {
-        return res.status(400).json({ error: 'Select an account admin' });
-      }
-      const tenantRoot = await resolveTenantRootFromAdminPicker(pickerId);
-      if (tenantRoot == null) {
-        return res.status(400).json({ error: 'Invalid account admin' });
-      }
+      const pickerId = typeof raw === 'number' ? raw : parseInt(String(raw || ''), 10);
+      const hasPicker = raw !== undefined && raw !== null && raw !== '' && !Number.isNaN(pickerId) && pickerId > 0;
       const regNow = new Date();
-      doc = await User.create({
-        userId,
-        email: em,
-        name: String(name).trim(),
-        passwordHash,
-        role: 'user',
-        isActive: true,
-        isMaster: false,
-        tenantRootUserId: tenantRoot,
-        lastActivityAt: regNow,
-        lastLoginAt: regNow,
-      });
-      await ensureWorkspaceForTenantRoot(tenantRoot);
-      try {
-        const wsU = await Workspace.findOne({ tenantRootUserId: tenantRoot });
-        if (wsU) {
-          const norm = normalizeWorkspacePayload(wsU.data);
-          norm.users = await usersToClientShapeForTenant(tenantRoot);
-          wsU.data = norm;
-          wsU.markModified('data');
-          await wsU.save();
+      if (hasPicker) {
+        const tenantRoot = await resolveTenantRootFromAdminPicker(pickerId);
+        if (tenantRoot == null) {
+          return res.status(400).json({ error: 'Invalid account admin' });
         }
-      } catch (seedErr) {
-        console.error('Register: seed ws users (team_user):', seedErr.message);
+        doc = await User.create({
+          userId,
+          email: em,
+          name: String(name).trim(),
+          passwordHash,
+          role: 'user',
+          isActive: true,
+          isMaster: false,
+          tenantRootUserId: tenantRoot,
+          lastActivityAt: regNow,
+          lastLoginAt: regNow,
+        });
+        await ensureWorkspaceForTenantRoot(tenantRoot);
+        try {
+          const wsU = await Workspace.findOne({ tenantRootUserId: tenantRoot });
+          if (wsU) {
+            const norm = normalizeWorkspacePayload(wsU.data);
+            norm.users = await usersToClientShapeForTenant(tenantRoot);
+            wsU.data = norm;
+            wsU.markModified('data');
+            await wsU.save();
+          }
+        } catch (seedErr) {
+          console.error('Register: seed ws users (team_user):', seedErr.message);
+        }
+      } else {
+        doc = await User.create({
+          userId,
+          email: em,
+          name: String(name).trim(),
+          passwordHash,
+          role: 'user',
+          isActive: true,
+          isMaster: false,
+          tenantRootUserId: null,
+          lastActivityAt: regNow,
+          lastLoginAt: regNow,
+        });
       }
     } else {
       const regNow = new Date();
