@@ -17,6 +17,7 @@ const {
   getSiteSettings,
 } = require('../services/registrationPolicy');
 const { allocateUniqueUserId } = require('../services/userSync');
+const { resolveTenantRootForSession } = require('../services/resolveTenantRootForSession');
 const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const Workspace = require('../models/Workspace');
 const { normalizeWorkspacePayload } = require('../services/defaultWorkspace');
@@ -43,13 +44,8 @@ function cookieOptions() {
   };
 }
 
-function publicUser(u) {
-  let tr = null;
-  if (u.tenantRootUserId != null && u.tenantRootUserId !== '' && !Number.isNaN(Number(u.tenantRootUserId))) {
-    tr = Number(u.tenantRootUserId);
-  } else if (u.role === 'admin' && !u.isMaster) {
-    tr = Number(u.userId);
-  }
+async function publicUser(u) {
+  const tr = await resolveTenantRootForSession(u);
   return {
     id: u.userId,
     email: u.email,
@@ -246,7 +242,7 @@ router.post('/register', validateBody(registerBodySchema), async (req, res) => {
         ? Math.max(0, Number(sReg.sessionIdleTimeoutMinutes))
         : 0;
     return res.status(201).json({
-      user: publicUser(doc),
+      user: await publicUser(doc),
       token,
       smtpConfigured: EMAIL_CONFIGURED,
       sessionIdleTimeoutMinutes: sessionIdleTimeoutMinutesReg,
@@ -419,7 +415,7 @@ router.post('/login', validateBody(loginBodySchema), async (req, res) => {
         ? Math.max(0, Number(s.sessionIdleTimeoutMinutes))
         : 0;
     return res.json({
-      user: publicUser(doc),
+      user: await publicUser(doc),
       token,
       smtpConfigured: EMAIL_CONFIGURED,
       sessionIdleTimeoutMinutes,
@@ -466,8 +462,9 @@ router.get('/me', async (req, res) => {
   if (!sess.ok) {
     return;
   }
+  const userPayload = await publicUser(doc);
   return res.json({
-    ...publicUser(doc),
+    ...userPayload,
     smtpConfigured: EMAIL_CONFIGURED,
     sessionIdleTimeoutMinutes: sess.sessionIdleTimeoutMinutes,
   });

@@ -544,17 +544,8 @@ router.get('/', authMiddleware, async (req, res) => {
       normalized.tasks = normalized.tasks.filter((t) => Number(t.assigned_to) === req.user.userId);
     }
 
-    try {
-      const dataToSave = { ...normalized };
-      if (Array.isArray(dataToSave.tasks)) {
-        dataToSave.tasks = dataToSave.tasks.filter((t) => !t._sharedTask);
-      }
-      ws.data = dataToSave;
-      ws.markModified('data');
-      await ws.save();
-    } catch (saveErr) {
-      console.error('GET /workspace: could not persist into ws.data:', saveErr.message);
-    }
+    // Never persist GET response to ws.data. A previous version saved here after filtering tasks for
+    // delegated admins, which overwrote the real workspace in Mongo with a partial task list.
 
     const nestedJ = ensureJournalNested(normalized.journal, tenantRoot);
     let out = { ...normalized, journal: nestedJ };

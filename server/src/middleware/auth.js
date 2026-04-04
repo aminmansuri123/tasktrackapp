@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const Workspace = require('../models/Workspace');
+const { resolveTenantRootForSession } = require('../services/resolveTenantRootForSession');
 const { JWT_SECRET } = require('../config');
 const { isProduction } = require('../config');
 const { getSiteSettings } = require('../services/registrationPolicy');
@@ -120,37 +120,16 @@ async function authMiddleware(req, res, next) {
       return;
     }
 
-    const rawTr = doc.tenantRootUserId;
-    const hasTr = rawTr != null && rawTr !== '' && !Number.isNaN(Number(rawTr));
-    const trNum = hasTr ? Number(rawTr) : null;
-    const uidNum = Number(doc.userId);
-
-    /**
-     * Tenant root for API. null = account user not yet linked.
-     * Admins with a workspace document at their own userId must resolve to that org (fixes bad links
-     * where tenantRootUserId pointed at another id — those users were treated as delegated admins and only saw their own tasks).
-     */
-    let tenantRootForReq;
-    if (doc.role === 'admin' && !doc.isMaster) {
-      if (!hasTr) {
-        tenantRootForReq = uidNum;
-      } else if (trNum === uidNum) {
-        tenantRootForReq = trNum;
-      } else {
-        const ownsWorkspace = await Workspace.findOne({ tenantRootUserId: doc.userId }).select('_id').lean();
-        if (ownsWorkspace) {
-          tenantRootForReq = uidNum;
-          if (trNum !== uidNum) {
-            await User.updateOne({ userId: doc.userId }, { $set: { tenantRootUserId: doc.userId } });
-          }
-        } else {
-          tenantRootForReq = trNum;
-        }
-      }
-    } else if (hasTr) {
-      tenantRootForReq = trNum;
-    } else {
-      tenantRootForReq = null;
+    let tenantRootForReq = await resolveTenantRootForSession(doc);
+    if (
+      doc.role === 'admin' &&
+      !doc.isMaster &&
+      doc.tenantRootUserId != null &&
+      !Number.isNaN(Number(doc.tenantRootUserId)) &&
+      Number(doc.tenantRootUserId) !== Number(doc.userId) &&
+      tenantRootForReq === Number(doc.userId)
+    ) {
+      await User.updateOne({ userId: doc.userId }, { $set: { tenantRootUserId: doc.userId } });
     }
 
     req.user = {
