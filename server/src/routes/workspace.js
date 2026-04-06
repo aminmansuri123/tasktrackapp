@@ -183,6 +183,63 @@ function mergeTasksForDelegatedAdmin(existingTasks, incomingTasks, userId) {
   return merged;
 }
 
+const ORG_OWNER_EMPTY_TASKS_GUARD_MIN = 5;
+const ORG_OWNER_PARTIAL_SYNC_RATIO = 0.25;
+
+/**
+ * Org-owner admin: client payload must not wipe or bulk-truncate the task list (stale tab, bad sync).
+ * - Empty incoming while many tasks exist → keep existing.
+ * - "Suspicious" tiny incoming vs large existing → union-by-id (updates only; keep unmentioned tasks).
+ * - Normal case → incoming is authoritative (deletes = task omitted from list).
+ */
+function mergeTasksForOrgOwner(existingTasks, incomingTasks) {
+  const existing = Array.isArray(existingTasks) ? existingTasks : [];
+  const incoming = Array.isArray(incomingTasks) ? incomingTasks : [];
+
+  if (existing.length === 0) {
+    return incoming;
+  }
+  if (incoming.length === 0) {
+    if (existing.length >= ORG_OWNER_EMPTY_TASKS_GUARD_MIN) {
+      console.warn(
+        '[workspace] PUT org owner: refused empty tasks array; preserving',
+        existing.length,
+        'tasks'
+      );
+      return existing;
+    }
+    return incoming;
+  }
+
+  const suspicious =
+    existing.length >= 15 &&
+    incoming.length > 0 &&
+    incoming.length < existing.length * ORG_OWNER_PARTIAL_SYNC_RATIO;
+
+  const byId = new Map(existing.map((t) => [String(t.id), { ...t }]));
+  for (const t of incoming) {
+    if (!t || t.id == null) continue;
+    const id = String(t.id);
+    const prev = byId.get(id);
+    byId.set(id, prev ? { ...prev, ...t } : { ...t });
+  }
+
+  if (suspicious) {
+    console.warn('[workspace] PUT org owner: partial task payload; preserving tasks not in request', {
+      existingCount: existing.length,
+      incomingCount: incoming.length,
+    });
+    return Array.from(byId.values());
+  }
+
+  return incoming.map((t) => {
+    if (!t || t.id == null) return t;
+    const id = String(t.id);
+    const base = existing.find((x) => String(x.id) === id) || {};
+    return { ...base, ...t };
+  });
+}
+
 const emailTaskViewLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -631,12 +688,24 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
 
     const merged = { ...incoming };
     const isDelegatedAdmin = isAdmin && isDelegatedTenantAdmin(req, tenantRoot);
-    if (isDelegatedAdmin) {
+    if (!isAdmin) {
+      merged.tasks = mergeTasksForDelegatedAdmin(
+        existingNormalized.tasks,
+        incoming.tasks,
+        req.user.userId
+      );
+    } else if (isDelegatedAdmin) {
       if (Array.isArray(incoming.tasks)) {
-        merged.tasks = mergeTasksForDelegatedAdmin(existingNormalized.tasks, incoming.tasks, req.user.userId);
+        merged.tasks = mergeTasksForDelegatedAdmin(
+          existingNormalized.tasks,
+          incoming.tasks,
+          req.user.userId
+        );
       } else {
         merged.tasks = existingNormalized.tasks;
       }
+    } else {
+      merged.tasks = mergeTasksForOrgOwner(existingNormalized.tasks, incoming.tasks);
     }
 
     merged.journal = mergeJournalUserSlice(
