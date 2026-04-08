@@ -11,6 +11,8 @@ const {
   EMAIL_CONFIGURED,
 } = require('../config');
 const { getSiteSettings } = require('./registrationPolicy');
+const Workspace = require('../models/Workspace');
+const { normalizeWorkspacePayload } = require('./defaultWorkspace');
 
 function isEmailEnabled() {
   return EMAIL_CONFIGURED;
@@ -26,13 +28,23 @@ function normalizeCcList(cc) {
   return [...new Set(cc.map((e) => String(e).trim().toLowerCase()).filter((e) => e.includes('@')))];
 }
 
-async function getStatusEmailCcList() {
+/** CC list stored on the tenant workspace (org admins); not master-level. */
+async function getTenantNotificationCcEmails(tenantRootUserId) {
+  const root = Number(tenantRootUserId);
+  if (!Number.isFinite(root)) return [];
   try {
-    const s = await getSiteSettings();
-    return normalizeCcList(s.statusEmailCc);
+    const ws = await Workspace.findOne({ tenantRootUserId: root }).lean();
+    if (!ws || !ws.data) return [];
+    const d = normalizeWorkspacePayload(ws.data);
+    return normalizeCcList(d.notificationEmailCc);
   } catch {
     return [];
   }
+}
+
+async function sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId) {
+  const cc = await getTenantNotificationCcEmails(tenantRootUserId);
+  return sendMail(toEmail, subject, html, { cc });
 }
 
 async function getEmailTemplatePair(key) {
@@ -99,9 +111,7 @@ async function sendMailSmtp(toEmail, subject, html, ccList = []) {
 let _loggedTransport = false;
 async function sendMail(toEmail, subject, html, options = {}) {
   const toLower = String(toEmail || '').trim().toLowerCase();
-  const extraCc = normalizeCcList(options.cc);
-  const statusCc = options.skipStatusCc ? [] : await getStatusEmailCcList();
-  const ccList = normalizeCcList([...statusCc, ...extraCc]).filter((e) => e && e !== toLower);
+  const ccList = normalizeCcList(options.cc || []).filter((e) => e && e !== toLower);
 
   if (RESEND_API_KEY) {
     if (!_loggedTransport) {
@@ -164,6 +174,50 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Matches Overview → Task Overview tiles (border / title colors in the app). */
+const OVERVIEW_TASK_TILES_FOR_EMAIL = [
+  { id: 'TodayWork', label: "Today's Work", color: '#667eea' },
+  { id: 'Overdue', label: 'Overdue', color: '#dc3545' },
+  { id: 'NoDueDate', label: 'No Due Date', color: '#6c757d' },
+  { id: 'InProcess', label: 'In Process', color: '#17a2b8' },
+  { id: 'WorkPlan', label: 'Work Plan', color: '#28a745' },
+  { id: 'NextWorkingDay', label: 'Next working day', color: '#6f42c1' },
+  { id: 'ReportToSelf', label: 'Report to (my tasks)', color: '#fd7e14' },
+];
+
+function buildOverviewTilesLegendHtml() {
+  const rows = OVERVIEW_TASK_TILES_FOR_EMAIL.map(
+    (t) =>
+      `<tr><td style="padding:8px 12px;border-bottom:1px solid #e3f2fd;vertical-align:middle;"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${t.color};margin-right:10px;vertical-align:middle;"></span><strong style="color:${t.color};">${escapeHtml(t.label)}</strong></td><td style="padding:8px 12px;font-size:12px;color:#546e7a;font-family:monospace;">${escapeHtml(t.color)}</td></tr>`
+  ).join('');
+  return `<table role="presentation" style="border-collapse:collapse;width:100%;max-width:520px;font-size:14px;margin:10px 0;"><thead><tr><th style="text-align:left;padding:8px 12px;background:#e3f2fd;color:#0d47a1;">Overview tab — tile name</th><th style="text-align:left;padding:8px 12px;background:#e3f2fd;color:#0d47a1;width:96px;">Hex</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function buildOverviewTilesLegendText() {
+  return OVERVIEW_TASK_TILES_FOR_EMAIL.map((t) => `${t.label} [${t.color}]`).join(' · ');
+}
+
+/** Placeholders for custom HTML email bodies: {{overviewTilesLegendHtml}}, {{tileTodayWork}}, … */
+function emailOverviewTileVarsForBody() {
+  const o = {
+    overviewTilesLegendHtml: buildOverviewTilesLegendHtml(),
+    overviewTilesLegendText: escapeHtml(buildOverviewTilesLegendText()),
+  };
+  for (const t of OVERVIEW_TASK_TILES_FOR_EMAIL) {
+    o[`tile${t.id}`] = `<strong style="color:${t.color};">${escapeHtml(t.label)}</strong>`;
+  }
+  return o;
+}
+
+/** Plain-text-friendly placeholders for subjects: {{tileTodayWorkText}}, {{overviewTilesLegendText}}, … */
+function emailOverviewTileVarsForPlain() {
+  const o = { overviewTilesLegendText: buildOverviewTilesLegendText() };
+  for (const t of OVERVIEW_TASK_TILES_FOR_EMAIL) {
+    o[`tile${t.id}Text`] = t.label;
+  }
+  return o;
 }
 
 /** Appended to every HTML email body for consistent branding. */
@@ -238,7 +292,7 @@ function buildReminderHtml(userName, overdueTasks, upcomingTasks) {
 </html>`;
 }
 
-async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTasks) {
+async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTasks, tenantRootUserId) {
   if (!isEmailEnabled()) return false;
 
   const total = overdueTasks.length + upcomingTasks.length;
@@ -246,8 +300,9 @@ async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTa
     total === 1 ? 'Task Reminder: 1 task needs attention' : `Task Reminder: ${total} tasks need attention`;
   const tpl = await getEmailTemplatePair('reminder');
   const defaultBody = buildReminderHtml(userName, overdueTasks, upcomingTasks);
-  const plain = { userName: userName || '', totalCount: String(total) };
+  const plain = { ...emailOverviewTileVarsForPlain(), userName: userName || '', totalCount: String(total) };
   const htmlVars = {
+    ...emailOverviewTileVarsForBody(),
     ...plain,
     userName: escapeHtml(plain.userName),
     defaultBody,
@@ -256,7 +311,7 @@ async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTa
   const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
 
   try {
-    await sendMail(toEmail, subject, html);
+    await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
     return true;
   } catch (err) {
     console.error(`Email send failed for ${toEmail}:`, err.message);
@@ -290,7 +345,16 @@ function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isS
 </html>`;
 }
 
-async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate, assignerName, isSelf, eventKind) {
+async function sendTaskAssignmentEmail(
+  toEmail,
+  assigneeName,
+  taskTitle,
+  dueDate,
+  assignerName,
+  isSelf,
+  eventKind,
+  tenantRootUserId
+) {
   if (!isEmailEnabled()) return false;
 
   const title = taskTitle || '(untitled)';
@@ -306,6 +370,7 @@ async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate
   const tpl = await getEmailTemplatePair('task_assigned');
   const dueFmt = dueDate ? formatDate(dueDate) : 'Not set';
   const plain = {
+    ...emailOverviewTileVarsForPlain(),
     assigneeName: assigneeName || '',
     taskTitle: title,
     dueDateFormatted: dueFmt,
@@ -314,6 +379,7 @@ async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate
     eventKind: eventKind || '',
   };
   const htmlVars = {
+    ...emailOverviewTileVarsForBody(),
     ...plain,
     assigneeName: escapeHtml(plain.assigneeName),
     taskTitle: escapeHtml(plain.taskTitle),
@@ -327,7 +393,7 @@ async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate
   const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
 
   try {
-    await sendMail(toEmail, subject, html);
+    await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
     return true;
   } catch (err) {
     console.error(`Assignment email failed for ${toEmail}:`, err.message);
@@ -361,18 +427,20 @@ function buildTaskRejectedHtml(assigneeName, taskTitle, comment, adminName) {
 </html>`;
 }
 
-async function sendTaskRejectedEmail(toEmail, assigneeName, taskTitle, comment, adminName) {
+async function sendTaskRejectedEmail(toEmail, assigneeName, taskTitle, comment, adminName, tenantRootUserId) {
   if (!isEmailEnabled()) return false;
   const title = taskTitle || '(untitled)';
   const defaultSubject = `Task needs revision: ${title}`;
   const tpl = await getEmailTemplatePair('task_rejected');
   const plain = {
+    ...emailOverviewTileVarsForPlain(),
     assigneeName: assigneeName || '',
     taskTitle: title,
     adminComment: comment || '',
     adminName: adminName || 'Admin',
   };
   const htmlVars = {
+    ...emailOverviewTileVarsForBody(),
     ...plain,
     assigneeName: escapeHtml(plain.assigneeName),
     taskTitle: escapeHtml(plain.taskTitle),
@@ -383,7 +451,7 @@ async function sendTaskRejectedEmail(toEmail, assigneeName, taskTitle, comment, 
   const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
   const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
   try {
-    await sendMail(toEmail, subject, html);
+    await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
     return true;
   } catch (err) {
     console.error(`Task rejected email failed for ${toEmail}:`, err.message);
@@ -486,7 +554,7 @@ async function sendPasswordResetCodeEmail(toEmail, userName, code) {
   }
 }
 
-async function sendTestEmail(toEmail, userName) {
+async function sendTestEmail(toEmail, userName, tenantRootUserId) {
   if (!isEmailEnabled()) {
     throw new Error('Email not configured. Set RESEND_API_KEY (recommended on Render) or SMTP_EMAIL + SMTP_PASSWORD.');
   }
@@ -495,7 +563,12 @@ async function sendTestEmail(toEmail, userName) {
     due_date: new Date().toISOString().split('T')[0],
     status: 'in_progress',
   };
-  await sendMail(toEmail, 'Test Email — Task Tracker Reminder', buildReminderHtml(userName, [], [demoTask]));
+  await sendMailWithTenantCc(
+    toEmail,
+    'Test Email — Task Tracker Reminder',
+    buildReminderHtml(userName, [], [demoTask]),
+    tenantRootUserId
+  );
   return true;
 }
 
@@ -581,7 +654,7 @@ function buildTaskViewSummaryEmailHtml(userName, rowsHtml, istLine) {
 </body></html>`;
 }
 
-async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
+async function sendTaskViewSummaryEmail(toEmail, userName, tasks, tenantRootUserId) {
   if (!isEmailEnabled()) {
     throw new Error('Email not configured');
   }
@@ -594,11 +667,13 @@ async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
   const defaultBody = buildTaskViewSummaryEmailHtml(userName, rows, istLine);
   const tpl = await getEmailTemplatePair('task_view_summary');
   const plain = {
+    ...emailOverviewTileVarsForPlain(),
     userName: userName || '',
     taskCount: String(tasks.length),
     generatedLine: istLine,
   };
   const htmlVars = {
+    ...emailOverviewTileVarsForBody(),
     ...plain,
     userName: escapeHtml(plain.userName),
     generatedLine: escapeHtml(istLine),
@@ -607,7 +682,7 @@ async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
   };
   const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
   const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
-  await sendMail(toEmail, subject, html);
+  await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
 }
 
 function buildNeedImprovementFinalizedHtml(assigneeName, taskTitle, adminComment, adminName, rowsHtml, istLine) {
@@ -648,7 +723,14 @@ function buildNeedImprovementFinalizedHtml(assigneeName, taskTitle, adminComment
 </body></html>`;
 }
 
-async function sendNeedImprovementFinalizedEmail(toEmail, assigneeName, taskTitle, adminComment, adminName) {
+async function sendNeedImprovementFinalizedEmail(
+  toEmail,
+  assigneeName,
+  taskTitle,
+  adminComment,
+  adminName,
+  tenantRootUserId
+) {
   if (!isEmailEnabled()) return false;
   const istLine = formatIstGeneratedLine();
   const rows = buildTaskViewSummaryTableRows([
@@ -665,12 +747,14 @@ async function sendNeedImprovementFinalizedEmail(toEmail, assigneeName, taskTitl
   );
   const tpl = await getEmailTemplatePair('need_improvement_finalized');
   const plain = {
+    ...emailOverviewTileVarsForPlain(),
     assigneeName: assigneeName || '',
     taskTitle: taskTitle || '(untitled)',
     adminComment: adminComment || '',
     adminName: adminName || 'Admin',
   };
   const htmlVars = {
+    ...emailOverviewTileVarsForBody(),
     ...plain,
     assigneeName: escapeHtml(plain.assigneeName),
     taskTitle: escapeHtml(plain.taskTitle),
@@ -683,7 +767,7 @@ async function sendNeedImprovementFinalizedEmail(toEmail, assigneeName, taskTitl
   const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
   const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
   try {
-    await sendMail(toEmail, subject, html);
+    await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
     return true;
   } catch (err) {
     console.error(`Need improvement finalized email failed for ${toEmail}:`, err.message);

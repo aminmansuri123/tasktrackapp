@@ -52,7 +52,7 @@ async function runReminders() {
 
       if (overdue.length === 0 && upcoming.length === 0) continue;
 
-      const ok = await sendTaskReminderEmail(user.email, user.name || user.email, overdue, upcoming);
+      const ok = await sendTaskReminderEmail(user.email, user.name || user.email, overdue, upcoming, tenantRoot);
       if (ok) {
         console.log(`[reminder-cron] Sent to ${user.email}: ${overdue.length} overdue, ${upcoming.length} upcoming`);
       }

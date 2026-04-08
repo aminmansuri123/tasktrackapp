@@ -35,7 +35,12 @@ const { formatLastLoginAtDisplay } = require('../lib/lastLoginFormat');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '17.4.0';
+const EXPORT_VERSION = '17.4.2';
+
+function sanitizeNotificationEmailCc(raw) {
+  const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,;]+/) : [];
+  return [...new Set(arr.map((e) => String(e).trim().toLowerCase()).filter((e) => e.includes('@')))].slice(0, 50);
+}
 
 function isLegacyFlatJournal(j) {
   if (!j || typeof j !== 'object' || Array.isArray(j)) return false;
@@ -735,8 +740,12 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
 
     if (isAdmin) {
       merged.reportToOptions = sanitizeReportToOptions({ reportToOptions: incoming.reportToOptions });
+      merged.notificationEmailCc = sanitizeNotificationEmailCc(incoming.notificationEmailCc);
     } else {
       merged.reportToOptions = existingNormalized.reportToOptions;
+      merged.notificationEmailCc = Array.isArray(existingNormalized.notificationEmailCc)
+        ? existingNormalized.notificationEmailCc
+        : [];
     }
 
     if (!isAdmin) {
@@ -1041,7 +1050,8 @@ router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
       dueDate || null,
       assignerName,
       !!isSelf,
-      kind
+      kind,
+      tenantRoot
     );
     return res.json({ ok: true });
   } catch (e) {
@@ -1078,7 +1088,8 @@ router.post('/notify-task-rejected', authMiddleware, async (req, res) => {
       assignee.name || assignee.email,
       taskTitle || '(untitled)',
       c,
-      adminName
+      adminName,
+      tenantRoot
     );
     return res.json({ ok: true });
   } catch (e) {
@@ -1131,7 +1142,8 @@ router.post('/notify-task-need-improvement-finalized', authMiddleware, async (re
       assignee.name || assignee.email,
       task.task_name || '(untitled)',
       adminComment,
-      adminName
+      adminName,
+      tenantRoot
     );
     return res.json({ ok: true });
   } catch (e) {
@@ -1179,7 +1191,8 @@ router.post('/send-test-reminder', authMiddleware, async (req, res) => {
   try {
     const user = await User.findOne({ userId: req.user.userId }).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
-    await sendTestEmail(user.email, user.name || user.email);
+    const tenantRoot = resolveTenantRoot(req);
+    await sendTestEmail(user.email, user.name || user.email, tenantRoot);
     return res.json({ ok: true, message: `Test email sent successfully to ${user.email}. Check your inbox (and spam folder).` });
   } catch (e) {
     console.error('send-test-reminder error:', e.message || e);
@@ -1219,7 +1232,7 @@ router.post(
         const tasks = Array.isArray(block.tasks) ? block.tasks : [];
         if (tasks.length === 0) continue;
         try {
-          await sendTaskViewSummaryEmail(udoc.email, udoc.name || udoc.email, tasks);
+          await sendTaskViewSummaryEmail(udoc.email, udoc.name || udoc.email, tasks, tenantRoot);
           sent.push(uid);
         } catch (err) {
           console.error('email-task-view-summary:', err.message);

@@ -17,6 +17,7 @@ const workspacePutSchema = z
     journal: z.record(z.string(), z.unknown()).optional(),
     reportToOptions: z.array(z.unknown()).max(200).optional(),
     templateBlocks: z.array(z.unknown()).max(5000).optional(),
+    notificationEmailCc: z.array(z.string().max(320)).max(50).optional(),
   });
 
 const loginBodySchema = z.object({

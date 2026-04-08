@@ -11,7 +11,6 @@ const {
   sanitizePolicyBody,
   sanitizeBlockedLists,
   sanitizeReportToOptions,
-  sanitizeStatusEmailCc,
   sanitizeEmailTemplatesDocument,
   EMAIL_TEMPLATE_KEYS,
 } = require('../services/registrationPolicy');
@@ -404,7 +403,6 @@ router.get('/email-settings', authMiddleware, requireMaster, async (_req, res) =
   try {
     const s = await getSiteSettings();
     return res.json({
-      statusEmailCc: Array.isArray(s.statusEmailCc) ? s.statusEmailCc : [],
       emailTemplates: s.emailTemplates && typeof s.emailTemplates === 'object' ? s.emailTemplates : {},
       templateKeys: EMAIL_TEMPLATE_KEYS,
     });
@@ -417,15 +415,11 @@ router.get('/email-settings', authMiddleware, requireMaster, async (_req, res) =
 router.put('/email-settings', authMiddleware, requireMaster, async (req, res) => {
   try {
     const s = await getSiteSettings();
-    if (req.body && req.body.statusEmailCc !== undefined) {
-      s.statusEmailCc = sanitizeStatusEmailCc(req.body || {});
-    }
     if (req.body && req.body.emailTemplates !== undefined) {
       s.emailTemplates = sanitizeEmailTemplatesDocument(req.body.emailTemplates);
     }
     await s.save();
     return res.json({
-      statusEmailCc: s.statusEmailCc,
       emailTemplates: s.emailTemplates,
     });
   } catch (e) {

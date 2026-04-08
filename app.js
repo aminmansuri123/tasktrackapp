@@ -1,4 +1,4 @@
-const APP_VERSION = '17.4.0';
+const APP_VERSION = '17.4.2';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -76,6 +76,39 @@ async function saveTenantReportToOptions() {
     renderSettings();
     renderTasks();
     renderInteractiveDashboard();
+}
+
+function parseNotificationEmailCcFromRaw(raw) {
+    const seen = new Set();
+    const out = [];
+    for (const part of String(raw || '').split(/[\n,;]+/)) {
+        const e = part.trim().toLowerCase();
+        if (!e || !e.includes('@') || seen.has(e)) continue;
+        seen.add(e);
+        out.push(e);
+        if (out.length >= 50) break;
+    }
+    return out;
+}
+
+async function saveTenantNotificationEmailCc() {
+    if (!currentUser || currentUser.role !== 'admin' || currentUser.isMaster) return;
+    const ta = document.getElementById('tenantNotificationEmailCcRaw');
+    if (!ta) return;
+    const list = parseNotificationEmailCcFromRaw(ta.value);
+    updateData(d => {
+        d.notificationEmailCc = list;
+    });
+    if (isApiMode()) {
+        await flushWorkspaceToApiNow();
+        try {
+            await apiPullWorkspace();
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    alert('CC list saved.');
+    renderSettings();
 }
 
 let __loginErrorDismissTimer = null;
@@ -565,6 +598,7 @@ function defaultWorkspaceShell() {
         journal: {},
         reportToOptions: [],
         tenantReportToOptions: [],
+        notificationEmailCc: [],
         templateBlocks: []
     };
 }
@@ -1254,7 +1288,8 @@ function loadData() {
             codeSnippets: [],
             journal: {},
             reportToOptions: [],
-            tenantReportToOptions: []
+            tenantReportToOptions: [],
+            notificationEmailCc: []
         };
         saveData(defaultData);
         return defaultData;
@@ -1279,6 +1314,7 @@ function normalizeData(data) {
             journal: {},
             reportToOptions: [],
             tenantReportToOptions: [],
+            notificationEmailCc: [],
             templateBlocks: []
         };
     }
@@ -1307,6 +1343,7 @@ function normalizeData(data) {
         journal: data.journal && typeof data.journal === 'object' ? data.journal : {},
         reportToOptions: Array.isArray(data.reportToOptions) ? data.reportToOptions : [],
         tenantReportToOptions: Array.isArray(data.tenantReportToOptions) ? data.tenantReportToOptions : [],
+        notificationEmailCc: Array.isArray(data.notificationEmailCc) ? data.notificationEmailCc : [],
         templateBlocks: Array.isArray(data.templateBlocks) ? data.templateBlocks : []
     };
 }
@@ -3438,10 +3475,11 @@ function renderTaskTiles(
     const data = getData();
     const tileTasksForEmail = {};
 
-    const nextDayTitleEl = document.getElementById('nextWorkingDayTileTitle');
-    if (nextDayTitleEl && nextWorkingDayStr) {
-        nextDayTitleEl.innerHTML =
-            `<span>📆</span> Next working day <span style="font-size:12px;font-weight:400;color:#888;">(${formatDateDisplay(nextWorkingDayStr)})</span>`;
+    const nextDayDateEl = document.getElementById('nextWorkingDayTileDate');
+    if (nextDayDateEl && nextWorkingDayStr) {
+        nextDayDateEl.textContent = `(${formatDateDisplay(nextWorkingDayStr)})`;
+    } else if (nextDayDateEl) {
+        nextDayDateEl.textContent = '';
     }
 
     // Helper function to render a single task item for tiles
@@ -7950,12 +7988,8 @@ function renderSettings() {
                     <input type="number" id="masterSessionIdleMinutes" class="form-control" min="0" max="10080" step="1" style="max-width:140px;">
                     <p style="color:#666;font-size:12px;margin-top:4px;">0 = disabled. The server signs users out after this many minutes without API activity (JWT may still be unexpired).</p>
                 </div>
-                <h3 style="margin-top:20px;">Email notifications (templates &amp; CC)</h3>
-                <p style="color:#666;font-size:13px;">Optional custom HTML and subjects for automated emails. Leave fields blank to use the built-in layout. CC addresses receive copies of status emails (assignments, rejections, Task View summaries, reminders, need-improvement finalized, password reset, welcome).</p>
-                <div class="form-group">
-                    <label for="masterStatusEmailCc">CC addresses (comma or newline separated)</label>
-                    <textarea id="masterStatusEmailCc" class="form-control" rows="2" placeholder="ops@company.com"></textarea>
-                </div>
+                <h3 style="margin-top:20px;">Email templates (site-wide)</h3>
+                <p style="color:#666;font-size:13px;">Optional custom HTML and subjects for automated emails. Leave fields blank to use the built-in layout. Task-related CC is configured per organisation under <strong>Settings → Report to</strong> (account admins only), not here. Welcome and password-reset emails are not CC’d.</p>
                 <div id="masterEmailTemplatesWrap" style="margin-top:12px;"></div>
                 <button type="button" class="btn btn-secondary" style="margin-bottom:16px;" onclick="saveMasterEmailSettings()">Save email settings</button>
                 <button type="button" class="btn btn-primary" onclick="saveMasterRegistrationPolicy()">Save registration rules</button>
@@ -8074,6 +8108,11 @@ function renderSettings() {
                 .map(o => (o && o.disabled ? `${o.label}|disabled` : o && o.label))
                 .filter(Boolean)
                 .join('\n');
+            const ccTa = document.getElementById('tenantNotificationEmailCcRaw');
+            if (ccTa) {
+                const ccList = Array.isArray(data.notificationEmailCc) ? data.notificationEmailCc : [];
+                ccTa.value = ccList.join(', ');
+            }
         } else {
             tenantRtCard.style.display = 'none';
         }
@@ -8358,14 +8397,17 @@ const MASTER_EMAIL_TYPE_LABELS = {
     need_improvement_finalized: 'Needs improvement — admin finalized',
 };
 
+const MASTER_EMAIL_OVERVIEW_TILES_HELP =
+    'Overview tabs (dashboard colours): HTML {{overviewTilesLegendHtml}} {{tileTodayWork}} {{tileOverdue}} {{tileNoDueDate}} {{tileInProcess}} {{tileWorkPlan}} {{tileNextWorkingDay}} {{tileReportToSelf}} — plain {{overviewTilesLegendText}} {{tileTodayWorkText}} …';
+
 const MASTER_EMAIL_TYPE_HELP = {
-    task_view_summary: '{{userName}} {{taskCount}} {{generatedLine}} — use {{taskRows}} for table rows only, or {{defaultBody}} for full default email.',
-    task_assigned: '{{assigneeName}} {{taskTitle}} {{dueDateFormatted}} {{assignerName}} {{isSelf}} {{eventKind}} {{isSelfText}} {{defaultBody}}',
-    task_rejected: '{{assigneeName}} {{taskTitle}} {{adminComment}} {{adminName}} {{defaultBody}}',
-    reminder: '{{userName}} {{totalCount}} {{defaultBody}}',
+    task_view_summary: `{{userName}} {{taskCount}} {{generatedLine}} — {{taskRows}} or {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
+    task_assigned: `{{assigneeName}} {{taskTitle}} {{dueDateFormatted}} {{assignerName}} {{isSelf}} {{eventKind}} {{isSelfText}} {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
+    task_rejected: `{{assigneeName}} {{taskTitle}} {{adminComment}} {{adminName}} {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
+    reminder: `{{userName}} {{totalCount}} {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
     account_created: '{{userName}} {{source}} {{contextHtml}} {{defaultBody}}',
     password_reset: '{{userName}} {{code}} {{defaultBody}}',
-    need_improvement_finalized: '{{assigneeName}} {{taskTitle}} {{adminComment}} {{adminName}} {{taskRows}} {{generatedLine}} {{defaultBody}}',
+    need_improvement_finalized: `{{assigneeName}} {{taskTitle}} {{adminComment}} {{adminName}} {{taskRows}} {{generatedLine}} {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
 };
 
 async function masterEmailSettingsHydrate() {
@@ -8379,10 +8421,6 @@ async function masterEmailSettingsHydrate() {
             return;
         }
         const data = await res.json();
-        const ccEl = document.getElementById('masterStatusEmailCc');
-        if (ccEl && Array.isArray(data.statusEmailCc)) {
-            ccEl.value = data.statusEmailCc.join(', ');
-        }
         const keys = Array.isArray(data.templateKeys) ? data.templateKeys : [];
         const tpl = data.emailTemplates && typeof data.emailTemplates === 'object' ? data.emailTemplates : {};
         wrap.innerHTML = keys
@@ -8419,8 +8457,6 @@ async function saveMasterEmailSettings() {
     if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
     const wrap = document.getElementById('masterEmailTemplatesWrap');
     if (!wrap) return;
-    const ccRaw = (document.getElementById('masterStatusEmailCc') && document.getElementById('masterStatusEmailCc').value) || '';
-    const statusEmailCc = ccRaw.split(/[\n,;]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
     let templateKeys = Object.keys(MASTER_EMAIL_TYPE_LABELS);
     try {
         const cur = await apiFetch('/api/master/email-settings');
@@ -8442,7 +8478,7 @@ async function saveMasterEmailSettings() {
     try {
         const res = await apiFetch('/api/master/email-settings', {
             method: 'PUT',
-            body: JSON.stringify({ statusEmailCc, emailTemplates }),
+            body: JSON.stringify({ emailTemplates }),
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));

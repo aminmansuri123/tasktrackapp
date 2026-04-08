@@ -1397,7 +1397,7 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Management System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v17.4.0</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v17.4.2</span></span>
             </div>
             <div class="header-global-search" style="flex:1;max-width:280px;margin:0 12px;position:relative;">
                 <input type="search" id="globalSearchInput" class="form-control" placeholder="Search tasks, notes, users, version…" autocomplete="off" style="width:100%;" title="Search across the app">
@@ -1556,7 +1556,7 @@
                             style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #6f42c1;">
                             <h4
                                 style="color: #6f42c1; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
-                                <span id="nextWorkingDayTileTitle" style="display: flex; align-items: center; gap: 8px;"><span>📆</span> Next working day</span>
+                                <span id="nextWorkingDayTileTitle" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"><span>📆</span> Next working day <span id="nextWorkingDayTileDate" style="font-size:12px;font-weight:400;color:#888;"></span></span>
                                 <button type="button" class="overview-tile-email-btn" onclick="event.stopPropagation(); sendOverviewTileEmailSummary('next_working_day')" title="Email task summary to assignees" style="background:none;border:none;cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:0.85;" aria-label="Email summary">✉</button>
                             </h4>
                             <div id="nextWorkingDayTileList" class="task-overview-tile-list">
@@ -2178,6 +2178,14 @@
                     </p>
                     <textarea id="tenantReportToOptionsRaw" class="form-control" rows="6" placeholder="CFO&#10;Finance Controller&#10;Team Lead|disabled"></textarea>
                     <button type="button" class="btn btn-primary" style="margin-top:10px;" onclick="saveTenantReportToOptions()">Save Report to options</button>
+                    <h4 style="margin-top:20px;margin-bottom:8px;font-size:16px;">Task email CC (organisation)</h4>
+                    <p style="color:#666;font-size:13px;line-height:1.55;margin-bottom:10px;">
+                        Optional addresses copied on task-related emails (assignments, rejections, Task View summaries, daily reminders, need-improvement finalized, test reminder).
+                        Stored on your workspace — any account admin in this organisation can view or change the same list.
+                    </p>
+                    <label for="tenantNotificationEmailCcRaw" style="font-size:13px;">CC addresses (comma, semicolon, or newline)</label>
+                    <textarea id="tenantNotificationEmailCcRaw" class="form-control" rows="3" placeholder="ops@company.com, backup@company.com"></textarea>
+                    <button type="button" class="btn btn-primary" style="margin-top:10px;" onclick="saveTenantNotificationEmailCc()">Save CC list</button>
                 </div>
 
                 <!-- User Management Section -->
@@ -2318,7 +2326,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">17.4.0</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">17.4.2</span></p>
         </footer>
     </div>
 
@@ -2402,7 +2410,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">17.4.0</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">17.4.2</span></p>
                     </div>
                 </div>
             </div>
@@ -3121,7 +3129,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=17.4.0"></script>
+    <script src="app.js?v=17.4.2"></script>
 </body>
 
 </html>

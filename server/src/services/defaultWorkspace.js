@@ -21,6 +21,7 @@ function defaultWorkspaceData() {
     journal: {},
     reportToOptions: [],
     templateBlocks: [],
+    notificationEmailCc: [],
   };
 }
 
@@ -43,6 +44,7 @@ function normalizeWorkspacePayload(data) {
     journal: data.journal && typeof data.journal === 'object' ? data.journal : {},
     reportToOptions: Array.isArray(data.reportToOptions) ? data.reportToOptions : [],
     templateBlocks: Array.isArray(data.templateBlocks) ? data.templateBlocks : [],
+    notificationEmailCc: Array.isArray(data.notificationEmailCc) ? data.notificationEmailCc : [],
   };
 }
 
