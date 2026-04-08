@@ -10,6 +10,7 @@ const {
   EMAIL_FROM,
   EMAIL_CONFIGURED,
 } = require('../config');
+const { getSiteSettings } = require('./registrationPolicy');
 
 function isEmailEnabled() {
   return EMAIL_CONFIGURED;
@@ -20,19 +21,60 @@ function resendFromHeader() {
   return 'Task Tracker <onboarding@resend.dev>';
 }
 
-async function sendMailResend(toEmail, subject, html) {
+function normalizeCcList(cc) {
+  if (!Array.isArray(cc)) return [];
+  return [...new Set(cc.map((e) => String(e).trim().toLowerCase()).filter((e) => e.includes('@')))];
+}
+
+async function getStatusEmailCcList() {
+  try {
+    const s = await getSiteSettings();
+    return normalizeCcList(s.statusEmailCc);
+  } catch {
+    return [];
+  }
+}
+
+async function getEmailTemplatePair(key) {
+  try {
+    const s = await getSiteSettings();
+    const t = s.emailTemplates && s.emailTemplates[key];
+    if (!t || typeof t !== 'object') return { subject: '', bodyHtml: '' };
+    return {
+      subject: String(t.subject || '').trim(),
+      bodyHtml: String(t.bodyHtml || '').trim(),
+    };
+  } catch {
+    return { subject: '', bodyHtml: '' };
+  }
+}
+
+function interpolateEmailTemplate(str, vars) {
+  if (!str) return '';
+  let out = String(str);
+  for (const [k, v] of Object.entries(vars)) {
+    const re = new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g');
+    out = out.replace(re, v != null ? String(v) : '');
+  }
+  return out;
+}
+
+async function sendMailResend(toEmail, subject, html, ccList = []) {
+  const payload = {
+    from: resendFromHeader(),
+    to: [toEmail],
+    subject,
+    html,
+  };
+  const cc = normalizeCcList(ccList);
+  if (cc.length) payload.cc = cc;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${RESEND_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      from: resendFromHeader(),
-      to: [toEmail],
-      subject,
-      html,
-    }),
+    body: JSON.stringify(payload),
   });
   const bodyText = await res.text();
   if (!res.ok) {
@@ -40,32 +82,40 @@ async function sendMailResend(toEmail, subject, html) {
   }
 }
 
-async function sendMailSmtp(toEmail, subject, html) {
+async function sendMailSmtp(toEmail, subject, html, ccList = []) {
   const transporter = await getTransporter();
   if (!transporter) throw new Error('SMTP transporter unavailable');
-  await transporter.sendMail({
+  const cc = normalizeCcList(ccList);
+  const mail = {
     from: `"Task Tracker" <${SMTP_EMAIL}>`,
     to: toEmail,
     subject,
     html,
-  });
+  };
+  if (cc.length) mail.cc = cc.join(',');
+  await transporter.sendMail(mail);
 }
 
 let _loggedTransport = false;
-async function sendMail(toEmail, subject, html) {
+async function sendMail(toEmail, subject, html, options = {}) {
+  const toLower = String(toEmail || '').trim().toLowerCase();
+  const extraCc = normalizeCcList(options.cc);
+  const statusCc = options.skipStatusCc ? [] : await getStatusEmailCcList();
+  const ccList = normalizeCcList([...statusCc, ...extraCc]).filter((e) => e && e !== toLower);
+
   if (RESEND_API_KEY) {
     if (!_loggedTransport) {
       console.log('[email] Sending via Resend API (HTTPS)');
       _loggedTransport = true;
     }
-    await sendMailResend(toEmail, subject, html);
+    await sendMailResend(toEmail, subject, html, ccList);
     return;
   }
   if (!_loggedTransport) {
     console.log('[email] Sending via SMTP');
     _loggedTransport = true;
   }
-  await sendMailSmtp(toEmail, subject, html);
+  await sendMailSmtp(toEmail, subject, html, ccList);
 }
 
 let _transporter = null;
@@ -192,12 +242,21 @@ async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTa
   if (!isEmailEnabled()) return false;
 
   const total = overdueTasks.length + upcomingTasks.length;
-  const subject = total === 1
-    ? 'Task Reminder: 1 task needs attention'
-    : `Task Reminder: ${total} tasks need attention`;
+  const defaultSubject =
+    total === 1 ? 'Task Reminder: 1 task needs attention' : `Task Reminder: ${total} tasks need attention`;
+  const tpl = await getEmailTemplatePair('reminder');
+  const defaultBody = buildReminderHtml(userName, overdueTasks, upcomingTasks);
+  const plain = { userName: userName || '', totalCount: String(total) };
+  const htmlVars = {
+    ...plain,
+    userName: escapeHtml(plain.userName),
+    defaultBody,
+  };
+  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
+  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
 
   try {
-    await sendMail(toEmail, subject, buildReminderHtml(userName, overdueTasks, upcomingTasks));
+    await sendMail(toEmail, subject, html);
     return true;
   } catch (err) {
     console.error(`Email send failed for ${toEmail}:`, err.message);
@@ -235,17 +294,40 @@ async function sendTaskAssignmentEmail(toEmail, assigneeName, taskTitle, dueDate
   if (!isEmailEnabled()) return false;
 
   const title = taskTitle || '(untitled)';
-  let subject;
+  let defaultSubject;
   if (eventKind === 'reassigned' && !isSelf) {
-    subject = `Task reassigned to you: ${title}`;
+    defaultSubject = `Task reassigned to you: ${title}`;
   } else if (isSelf) {
-    subject = `New task created: ${title}`;
+    defaultSubject = `New task created: ${title}`;
   } else {
-    subject = `New task assigned to you: ${title}`;
+    defaultSubject = `New task assigned to you: ${title}`;
   }
 
+  const tpl = await getEmailTemplatePair('task_assigned');
+  const dueFmt = dueDate ? formatDate(dueDate) : 'Not set';
+  const plain = {
+    assigneeName: assigneeName || '',
+    taskTitle: title,
+    dueDateFormatted: dueFmt,
+    assignerName: assignerName || 'Admin',
+    isSelf: isSelf ? 'yes' : 'no',
+    eventKind: eventKind || '',
+  };
+  const htmlVars = {
+    ...plain,
+    assigneeName: escapeHtml(plain.assigneeName),
+    taskTitle: escapeHtml(plain.taskTitle),
+    assignerName: escapeHtml(plain.assignerName),
+    isSelfText: isSelf
+      ? 'You created this task for yourself.'
+      : `Assigned by <strong>${escapeHtml(assignerName || 'an admin')}</strong>.`,
+    defaultBody: buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf),
+  };
+  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
+  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
+
   try {
-    await sendMail(toEmail, subject, buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf));
+    await sendMail(toEmail, subject, html);
     return true;
   } catch (err) {
     console.error(`Assignment email failed for ${toEmail}:`, err.message);
@@ -281,9 +363,27 @@ function buildTaskRejectedHtml(assigneeName, taskTitle, comment, adminName) {
 
 async function sendTaskRejectedEmail(toEmail, assigneeName, taskTitle, comment, adminName) {
   if (!isEmailEnabled()) return false;
-  const subject = `Task needs revision: ${taskTitle || '(untitled)'}`;
+  const title = taskTitle || '(untitled)';
+  const defaultSubject = `Task needs revision: ${title}`;
+  const tpl = await getEmailTemplatePair('task_rejected');
+  const plain = {
+    assigneeName: assigneeName || '',
+    taskTitle: title,
+    adminComment: comment || '',
+    adminName: adminName || 'Admin',
+  };
+  const htmlVars = {
+    ...plain,
+    assigneeName: escapeHtml(plain.assigneeName),
+    taskTitle: escapeHtml(plain.taskTitle),
+    adminComment: escapeHtml(plain.adminComment),
+    adminName: escapeHtml(plain.adminName),
+    defaultBody: buildTaskRejectedHtml(assigneeName, taskTitle, comment, adminName),
+  };
+  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
+  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
   try {
-    await sendMail(toEmail, subject, buildTaskRejectedHtml(assigneeName, taskTitle, comment, adminName));
+    await sendMail(toEmail, subject, html);
     return true;
   } catch (err) {
     console.error(`Task rejected email failed for ${toEmail}:`, err.message);
@@ -322,8 +422,19 @@ async function sendAccountCreatedEmail(toEmail, userName, source) {
     contextHtml =
       '<p style="font-size:14px;color:#333;margin:0;">An administrator created your Task Tracker account. Use the password they gave you (you can change it after signing in).</p>';
   }
+  const defaultSubject = 'Your Task Tracker account is ready';
+  const tpl = await getEmailTemplatePair('account_created');
+  const plain = { userName: userName || '', source: source || '' };
+  const htmlVars = {
+    ...plain,
+    userName: escapeHtml(plain.userName),
+    contextHtml,
+    defaultBody: buildAccountCreatedHtml(userName, contextHtml),
+  };
+  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
+  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
   try {
-    await sendMail(toEmail, 'Your Task Tracker account is ready', buildAccountCreatedHtml(userName, contextHtml));
+    await sendMail(toEmail, subject, html);
     return true;
   } catch (err) {
     console.error(`Account created email failed for ${toEmail}:`, err.message);
@@ -355,8 +466,19 @@ function buildPasswordResetCodeHtml(userName, code) {
 
 async function sendPasswordResetCodeEmail(toEmail, userName, code) {
   if (!isEmailEnabled()) return false;
+  const defaultSubject = `Your password reset code: ${code}`;
+  const tpl = await getEmailTemplatePair('password_reset');
+  const plain = { userName: userName || '', code: code || '' };
+  const htmlVars = {
+    ...plain,
+    userName: escapeHtml(plain.userName),
+    code: escapeHtml(plain.code),
+    defaultBody: buildPasswordResetCodeHtml(userName, code),
+  };
+  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
+  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
   try {
-    await sendMail(toEmail, `Your password reset code: ${code}`, buildPasswordResetCodeHtml(userName, code));
+    await sendMail(toEmail, subject, html);
     return true;
   } catch (err) {
     console.error(`Password reset email failed for ${toEmail}:`, err.message);
@@ -412,14 +534,8 @@ function formatIstGeneratedLine() {
  * @param {string} userName
  * @param {{ title: string, due?: string, overdue?: boolean, status?: string }[]} tasks
  */
-async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
-  if (!isEmailEnabled()) {
-    throw new Error('Email not configured');
-  }
-  if (!Array.isArray(tasks) || tasks.length === 0) {
-    throw new Error('No tasks');
-  }
-  const rows = tasks
+function buildTaskViewSummaryTableRows(tasks) {
+  return tasks
     .map((t) => {
       const statusRaw =
         t.status != null && String(t.status).trim() !== ''
@@ -435,8 +551,10 @@ async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
 </tr>`;
     })
     .join('');
-  const istLine = formatIstGeneratedLine();
-  const html = `
+}
+
+function buildTaskViewSummaryEmailHtml(userName, rowsHtml, istLine) {
+  return `
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;background:#e8f4fc;">
@@ -453,7 +571,7 @@ async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
               <th style="text-align:left;padding:12px 14px;font-weight:600;">Status</th>
             </tr>
           </thead>
-          <tbody>${rows}</tbody>
+          <tbody>${rowsHtml}</tbody>
         </table>
         <p style="margin:16px 0 0;font-size:12px;color:#546e7a;">Generated ${escapeHtml(istLine)} (IST)</p>
       </div>
@@ -461,11 +579,116 @@ async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
     ${emailBrandFooterHtml()}
   </div>
 </body></html>`;
-  await sendMail(
-    toEmail,
-    `Task View summary (${tasks.length} task${tasks.length === 1 ? '' : 's'})`,
-    html
+}
+
+async function sendTaskViewSummaryEmail(toEmail, userName, tasks) {
+  if (!isEmailEnabled()) {
+    throw new Error('Email not configured');
+  }
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    throw new Error('No tasks');
+  }
+  const rows = buildTaskViewSummaryTableRows(tasks);
+  const istLine = formatIstGeneratedLine();
+  const defaultSubject = `Task View summary (${tasks.length} task${tasks.length === 1 ? '' : 's'})`;
+  const defaultBody = buildTaskViewSummaryEmailHtml(userName, rows, istLine);
+  const tpl = await getEmailTemplatePair('task_view_summary');
+  const plain = {
+    userName: userName || '',
+    taskCount: String(tasks.length),
+    generatedLine: istLine,
+  };
+  const htmlVars = {
+    ...plain,
+    userName: escapeHtml(plain.userName),
+    generatedLine: escapeHtml(istLine),
+    taskRows: rows,
+    defaultBody,
+  };
+  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
+  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
+  await sendMail(toEmail, subject, html);
+}
+
+function buildNeedImprovementFinalizedHtml(assigneeName, taskTitle, adminComment, adminName, rowsHtml, istLine) {
+  const st = taskViewEmailStatusStyle('Needs Improvement');
+  const row =
+    rowsHtml ||
+    `<tr>
+<td style="padding:10px 12px;border-bottom:1px solid #bbdefb;vertical-align:middle;">${escapeHtml(taskTitle || '(untitled)')}</td>
+<td style="padding:10px 12px;border-bottom:1px solid #bbdefb;vertical-align:middle;color:#1565c0;">—</td>
+<td style="padding:10px 12px;border-bottom:1px solid #bbdefb;vertical-align:middle;font-weight:600;background:${st.bg};color:${st.color};">Needs Improvement</td>
+</tr>`;
+  return `
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#e8f4fc;">
+  <div style="font-family:Segoe UI,Roboto,Helvetica,sans-serif;max-width:720px;margin:0 auto;padding:24px 20px;">
+    <div style="background:#e3f2fd;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(13,71,161,0.08);border-left:5px solid #1976d2;">
+      <div style="padding:22px 24px 18px;">
+        <p style="margin:0 0 10px;font-size:15px;color:#0d47a1;">Hello ${escapeHtml(assigneeName || '')},</p>
+        <p style="margin:0 0 14px;font-size:14px;color:#37474f;">Your task completion was reviewed and marked <strong>Needs improvement</strong>. Admin comment:</p>
+        <p style="margin:0 0 18px;font-size:15px;font-weight:700;color:#5d4037;white-space:pre-wrap;">${escapeHtml(adminComment || '')}</p>
+        <p style="margin:0 0 8px;font-size:13px;color:#546e7a;">Reviewer: ${escapeHtml(adminName || 'Admin')}</p>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;background:#fff;border-radius:8px;overflow:hidden;">
+          <thead>
+            <tr style="background:#bbdefb;color:#0d47a1;">
+              <th style="text-align:left;padding:12px 14px;font-weight:600;">Task</th>
+              <th style="text-align:left;padding:12px 14px;font-weight:600;">Due</th>
+              <th style="text-align:left;padding:12px 14px;font-weight:600;">Status</th>
+            </tr>
+          </thead>
+          <tbody>${row}</tbody>
+        </table>
+        <p style="margin:16px 0 0;font-size:12px;color:#546e7a;">Generated ${escapeHtml(istLine)} (IST)</p>
+      </div>
+    </div>
+    ${emailBrandFooterHtml()}
+  </div>
+</body></html>`;
+}
+
+async function sendNeedImprovementFinalizedEmail(toEmail, assigneeName, taskTitle, adminComment, adminName) {
+  if (!isEmailEnabled()) return false;
+  const istLine = formatIstGeneratedLine();
+  const rows = buildTaskViewSummaryTableRows([
+    { title: taskTitle || '(untitled)', due: '—', status: 'Needs Improvement' },
+  ]);
+  const defaultSubject = `Task reviewed — needs improvement: ${taskTitle || '(untitled)'}`;
+  const defaultBody = buildNeedImprovementFinalizedHtml(
+    assigneeName,
+    taskTitle,
+    adminComment,
+    adminName,
+    rows,
+    istLine
   );
+  const tpl = await getEmailTemplatePair('need_improvement_finalized');
+  const plain = {
+    assigneeName: assigneeName || '',
+    taskTitle: taskTitle || '(untitled)',
+    adminComment: adminComment || '',
+    adminName: adminName || 'Admin',
+  };
+  const htmlVars = {
+    ...plain,
+    assigneeName: escapeHtml(plain.assigneeName),
+    taskTitle: escapeHtml(plain.taskTitle),
+    adminComment: escapeHtml(plain.adminComment),
+    adminName: escapeHtml(plain.adminName),
+    generatedLine: escapeHtml(istLine),
+    taskRows: rows,
+    defaultBody,
+  };
+  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
+  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
+  try {
+    await sendMail(toEmail, subject, html);
+    return true;
+  } catch (err) {
+    console.error(`Need improvement finalized email failed for ${toEmail}:`, err.message);
+    return false;
+  }
 }
 
 module.exports = {
@@ -477,4 +700,5 @@ module.exports = {
   sendAccountCreatedEmail,
   sendPasswordResetCodeEmail,
   sendTaskViewSummaryEmail,
+  sendNeedImprovementFinalizedEmail,
 };

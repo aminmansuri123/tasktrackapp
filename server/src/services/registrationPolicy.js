@@ -127,6 +127,64 @@ async function assertEmailNotBlocked(email) {
   return null;
 }
 
+const EMAIL_TEMPLATE_KEYS = [
+  'task_view_summary',
+  'task_assigned',
+  'task_rejected',
+  'reminder',
+  'account_created',
+  'password_reset',
+  'need_improvement_finalized',
+];
+
+function sanitizeStatusEmailCc(body) {
+  const raw = body?.statusEmailCc;
+  const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,;]+/) : [];
+  const out = [...new Set(arr.map(normalizeEmailEntry).filter((e) => e && e.includes('@')))];
+  return out.slice(0, 50);
+}
+
+function sanitizeEmailTemplates(body) {
+  const raw = body?.emailTemplates;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const key of EMAIL_TEMPLATE_KEYS) {
+    const entry = raw[key];
+    if (!entry || typeof entry !== 'object') continue;
+    const subject = String(entry.subject != null ? entry.subject : '')
+      .trim()
+      .slice(0, 500);
+    const bodyHtml = String(entry.bodyHtml != null ? entry.bodyHtml : '')
+      .trim()
+      .slice(0, 200000);
+    if (!subject && !bodyHtml) continue;
+    out[key] = { subject, bodyHtml };
+  }
+  return out;
+}
+
+/** Full document for all template keys (master email settings form). */
+function sanitizeEmailTemplatesDocument(raw) {
+  const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const out = {};
+  for (const key of EMAIL_TEMPLATE_KEYS) {
+    const entry = src[key];
+    if (!entry || typeof entry !== 'object') {
+      out[key] = { subject: '', bodyHtml: '' };
+      continue;
+    }
+    out[key] = {
+      subject: String(entry.subject != null ? entry.subject : '')
+        .trim()
+        .slice(0, 500),
+      bodyHtml: String(entry.bodyHtml != null ? entry.bodyHtml : '')
+        .trim()
+        .slice(0, 200000),
+    };
+  }
+  return out;
+}
+
 module.exports = {
   getSiteSettings,
   assertRegistrationAllowed,
@@ -134,6 +192,10 @@ module.exports = {
   sanitizeBlockedLists,
   sanitizePolicyBody,
   sanitizeReportToOptions,
+  sanitizeStatusEmailCc,
+  sanitizeEmailTemplates,
+  sanitizeEmailTemplatesDocument,
+  EMAIL_TEMPLATE_KEYS,
   normalizeEmailEntry,
   normalizeDomainEntry,
 };

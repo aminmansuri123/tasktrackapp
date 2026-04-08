@@ -1,4 +1,4 @@
-const APP_VERSION = '17.3.1';
+const APP_VERSION = '17.4.0';
 
 /** Display timestamps in India Standard Time (UTC+05:30). Storage remains ISO UTC. */
 const APP_TIMEZONE = 'Asia/Kolkata';
@@ -374,6 +374,74 @@ async function apiFetch(path, options = {}) {
         }
     }
     return res;
+}
+
+let __lastActivityLogKey = '';
+let __lastActivityLogAt = 0;
+
+function logUserActivity(action, entityType, entityId, summary) {
+    if (!isApiMode() || !currentUser || currentUser.isMaster) return;
+    const key = `${action}|${entityType}|${entityId}`;
+    const now = Date.now();
+    if (key === __lastActivityLogKey && now - __lastActivityLogAt < 2500) return;
+    __lastActivityLogKey = key;
+    __lastActivityLogAt = now;
+    void apiFetch('/api/activity-log', {
+        method: 'POST',
+        body: JSON.stringify({
+            action: String(action || '').slice(0, 64),
+            entityType: entityType != null ? String(entityType).slice(0, 32) : '',
+            entityId: entityId != null ? String(entityId).slice(0, 64) : '',
+            summary: String(summary || '').slice(0, 500),
+        }),
+    }).catch(() => {});
+}
+
+async function loadActivityLogForSettings() {
+    const listEl = document.getElementById('settingsActivityLogList');
+    if (!listEl) return;
+    if (!isApiMode() || !currentUser || currentUser.isMaster) return;
+    listEl.innerHTML = '<span style="color:#999;">Loading…</span>';
+    try {
+        const res = await apiFetch('/api/activity-log?limit=100');
+        if (!res.ok) {
+            listEl.innerHTML = '<span style="color:#c00;">Could not load.</span>';
+            return;
+        }
+        const data = await res.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (items.length === 0) {
+            listEl.innerHTML = '<span style="color:#999;">No entries yet.</span>';
+            return;
+        }
+        listEl.innerHTML = items
+            .map((r) => {
+                const t = r.createdAt ? formatDateTimeIST(r.createdAt) : '';
+                const sum = r.summary ? escapeHtml(r.summary) : '';
+                return `<div style="padding:8px 0;border-bottom:1px solid #eee;"><span style="color:#888;font-size:12px;">${escapeHtml(t)}</span><br><strong>${escapeHtml(r.action || '')}</strong>${r.entityId ? ` <span style="color:#666;">#${escapeHtml(String(r.entityId))}</span>` : ''}${sum ? `<div style="color:#555;margin-top:4px;">${sum}</div>` : ''}</div>`;
+            })
+            .join('');
+    } catch (e) {
+        console.error(e);
+        listEl.innerHTML = '<span style="color:#c00;">Error.</span>';
+    }
+}
+
+async function masterClearAllActivityLogs() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    if (!confirm('Delete ALL activity log entries for every user? This cannot be undone.')) return;
+    try {
+        const res = await apiFetch('/api/activity-log/all', { method: 'DELETE' });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            alert(j.error || 'Could not clear logs.');
+            return;
+        }
+        alert(`Deleted ${j.deletedCount != null ? j.deletedCount : 'all'} log entries.`);
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
 }
 
 async function apiPullWorkspace() {
@@ -2689,6 +2757,7 @@ function templateDeleteBlock(blockId) {
         data.templateBlocks = data.templateBlocks.filter(x => x.id !== blockId);
     });
     renderTemplateTab();
+    logUserActivity('template_delete', 'template', blockId, 'Removed template block');
 }
 
 function templateStartEditTitle(blockId) {
@@ -2729,16 +2798,20 @@ function templateSetBlockTitle(blockId, title) {
 
 function templateAddNewBlock() {
     if (!currentUser) return;
+    let newId = null;
     updateData(data => {
         if (!Array.isArray(data.templateBlocks)) data.templateBlocks = [];
+        const id = newTemplateEntityId();
+        newId = id;
         data.templateBlocks.push({
-            id: newTemplateEntityId(),
+            id,
             title: 'New checklist',
             created_by: currentUser.id,
             items: []
         });
     });
     renderTemplateTab();
+    if (newId) logUserActivity('template_add', 'template', newId, 'Added template block');
 }
 
 /** Switch to Task Setup and open new-task modal */
@@ -2788,6 +2861,23 @@ function copyTemplateChecklist(blockId) {
     }
 }
 
+function templateLoadStarterBlocks() {
+    if (!currentUser) return;
+    const data = getData();
+    const mine = (data.templateBlocks || []).filter(b => b && Number(b.created_by) === Number(currentUser.id));
+    if (mine.length > 0 && !confirm('You already have template blocks. Add starter checklists anyway (duplicates may appear)?')) {
+        return;
+    }
+    updateData(d => {
+        if (!Array.isArray(d.templateBlocks)) d.templateBlocks = [];
+        const seeded = seedTemplateBlocksFromLibrary(currentUser.id);
+        d.templateBlocks = [...d.templateBlocks, ...seeded];
+    });
+    renderTemplateTab();
+    logUserActivity('template_starter_load', 'template', '', 'Loaded starter template checklists');
+    if (isApiMode()) void flushWorkspaceToApiNow();
+}
+
 function renderTemplateTab() {
     const root = document.getElementById('templatesRoot');
     if (!root) return;
@@ -2795,23 +2885,19 @@ function renderTemplateTab() {
         root.innerHTML = '<p style="color:#999;">Sign in to manage templates.</p>';
         return;
     }
-    let data = getData();
-    if (!Array.isArray(data.templateBlocks) || data.templateBlocks.length === 0) {
-        updateData(d => {
-            if (!Array.isArray(d.templateBlocks) || d.templateBlocks.length === 0) {
-                d.templateBlocks = seedTemplateBlocksFromLibrary(currentUser.id);
-            }
-        });
-        data = getData();
-    }
+    const data = getData();
     const blocks = (data.templateBlocks || []).filter(
         b => b && Number(b.created_by) === Number(currentUser.id)
     );
     const colors = ['#3949ab', '#00897b', '#f57c00', '#6a1b9a', '#c62828'];
     const addBlockJs = 'templateAddNewBlock()';
+    const starterBtn =
+        blocks.length === 0
+            ? `<button type="button" class="btn btn-secondary" style="margin-bottom:12px;margin-left:8px;padding:4px 12px;font-size:12px;" onclick="templateLoadStarterBlocks()">Load starter templates</button>`
+            : '';
     root.innerHTML = `
         <div style="max-width:900px;margin:0 auto;">
-            <button type="button" class="btn btn-primary" style="margin-bottom:12px;padding:4px 12px;font-size:12px;" onclick="${addBlockJs}">Add template block</button>
+            <button type="button" class="btn btn-primary" style="margin-bottom:12px;padding:4px 12px;font-size:12px;" onclick="${addBlockJs}">Add template block</button>${starterBtn}
             <div style="display:flex;flex-direction:column;gap:12px;">
                 ${blocks
                     .map((t, idx) => {
@@ -2886,8 +2972,11 @@ function renderDashboard() {
     let noDueDateTasks = []; // Array to collect no due date tasks
     let inProcessTasks = []; // Array to collect in-process tasks (task_action === 'in_process')
     let workPlan = 0;
-    let workPlanTasks = []; // Array to collect work plan tasks
+    let workPlanTasksForTile = []; // Work Plan tile: all open work_plan tasks (ignores Overview period)
+    let nextWorkingDayTasks = []; // Due on next working day (Mon–Fri, skip holidays)
+    let reportToSelfTasks = []; // Assigned to self with Report to set; ignores period
     let auditPoint = 0;
+    const nextWorkingDayStr = addWorkingDays(today, 1);
     let adminReview = 0;
 
     // User-wise statistics
@@ -2936,6 +3025,13 @@ function renderDashboard() {
         // For other dashboard stats (today, overdue, etc.), check if task is visible to current user
         if (!taskVisibleToCurrentUser(task)) return;
 
+        // Report to tile: self-assigned, report_to set, any status (not removed)
+        if (!task.removed_at &&
+            Number(task.assigned_to) === Number(currentUser.id) &&
+            String(task.report_to_id || '').trim() !== '') {
+            reportToSelfTasks.push(task);
+        }
+
         // Count tasks without due date (exclude Need Improvement and Not Done)
         if (task.task_type === 'without_due_date' &&
             task.task_action !== 'completed' &&
@@ -2950,23 +3046,22 @@ function renderDashboard() {
             inProcessTasks.push(task);
         }
 
-        // Count work plan tasks (in selected period; exclude Need Improvement and Not Done)
+        // Work plan: tile lists all open work_plan tasks; stat count still uses selected period only
         if (task.task_type === 'work_plan' &&
             task.task_action !== 'completed' &&
             task.task_action !== 'completed_need_improvement' &&
-            task.task_action !== 'not_done') {
+            task.task_action !== 'not_done' &&
+            !task.removed_at) {
+            workPlanTasksForTile.push(task);
             if (dueDate) {
                 const dateParts = dueDate.split('-');
                 const taskDate = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]));
                 taskDate.setHours(0, 0, 0, 0);
                 if (taskDate >= fromDate && taskDate <= toDate) {
                     workPlan++;
-                    workPlanTasks.push(task);
                 }
             } else {
-                // If no due date, count it
                 workPlan++;
-                workPlanTasks.push(task);
             }
         }
 
@@ -3005,6 +3100,10 @@ function renderDashboard() {
 
             if (dueDate === todayStr && !isClosedForOverdue && task.task_action !== 'in_process') {
                 todayTasks.push(task);
+            }
+
+            if (dueDate === nextWorkingDayStr && !isClosedForOverdue && task.task_action !== 'in_process') {
+                nextWorkingDayTasks.push(task);
             }
 
             if (dueDate && !isClosedForOverdue && task.task_action !== 'in_process') {
@@ -3313,12 +3412,37 @@ function renderDashboard() {
     document.getElementById('todayTasks').innerHTML = todayTasksHtml;
 
     // Render task tiles for quick overview
-    renderTaskTiles(todayTasks, overdueTasks, noDueDateTasks, inProcessTasks, workPlanTasks);
+    renderTaskTiles(
+        todayTasks,
+        overdueTasks,
+        noDueDateTasks,
+        inProcessTasks,
+        workPlanTasksForTile,
+        nextWorkingDayTasks,
+        reportToSelfTasks,
+        nextWorkingDayStr
+    );
 }
 
 // Render task tiles on dashboard
-function renderTaskTiles(todayTasks, overdueTasks, noDueDateTasks, inProcessTasks, workPlanTasks) {
+function renderTaskTiles(
+    todayTasks,
+    overdueTasks,
+    noDueDateTasks,
+    inProcessTasks,
+    workPlanTasksForTile,
+    nextWorkingDayTasks,
+    reportToSelfTasks,
+    nextWorkingDayStr
+) {
     const data = getData();
+    const tileTasksForEmail = {};
+
+    const nextDayTitleEl = document.getElementById('nextWorkingDayTileTitle');
+    if (nextDayTitleEl && nextWorkingDayStr) {
+        nextDayTitleEl.innerHTML =
+            `<span>📆</span> Next working day <span style="font-size:12px;font-weight:400;color:#888;">(${formatDateDisplay(nextWorkingDayStr)})</span>`;
+    }
 
     // Helper function to render a single task item for tiles
     const renderTileTaskItem = (task) => {
@@ -3337,6 +3461,27 @@ function renderTaskTiles(todayTasks, overdueTasks, noDueDateTasks, inProcessTask
                 <div style="font-size: 11px; color: #666; display: flex; justify-content: space-between; align-items: center;">
                     <span>${assignedUser ? assignedUser.name : 'Unassigned'}</span>
                     <span style="color: #999;">${dueDateStr}</span>
+                </div>
+            </div>
+        `;
+    };
+
+    const renderReportToTileItem = (task) => {
+        const dueDate = task.due_date || task.next_due_date;
+        const dueDateStr = dueDate ? formatDateDisplay(dueDate) : 'No due date';
+        const rt = reportToLabelForId(task.report_to_id) || String(task.report_to_id || '');
+        const st = interactiveTaskViewStatusForEmail(task);
+        return `
+            <div onclick="openInteractiveTaskPopup(${task.id})" 
+                 style="padding: 10px; background: #f8f9fa; border-radius: 5px; cursor: pointer; transition: all 0.2s; border-left: 3px solid #fd7e14;"
+                 onmouseenter="this.style.background='#e9ecef'; this.style.transform='translateX(5px)'"
+                 onmouseleave="this.style.background='#f8f9fa'; this.style.transform='translateX(0)'">
+                <div style="font-size: 13px; font-weight: 500; color: #333; margin-bottom: 4px;">
+                    ${escapeHtml(task.task_name)}
+                </div>
+                <div style="font-size: 11px; color: #666;">
+                    <span style="color:#fd7e14;">Report to: ${escapeHtml(rt)}</span>
+                    <span style="color: #999;"> · ${escapeHtml(dueDateStr)} · ${escapeHtml(st)}</span>
                 </div>
             </div>
         `;
@@ -3377,6 +3522,7 @@ function renderTaskTiles(todayTasks, overdueTasks, noDueDateTasks, inProcessTask
                 const priorityOrder = { high: 1, medium: 2, low: 3 };
                 return (priorityOrder[a.priority] || 4) - (priorityOrder[b.priority] || 4);
             });
+        tileTasksForEmail.today = sortedToday;
 
         todayWorkList.innerHTML = sortedToday.length > 0
             ? sortedToday.map(renderTileTaskItem).join('')
@@ -3388,6 +3534,7 @@ function renderTaskTiles(todayTasks, overdueTasks, noDueDateTasks, inProcessTask
     if (overdueList) {
         const sortedOverdue = [...overdueTasks]
             .sort((a, b) => (a.due_date || a.next_due_date || '').localeCompare(b.due_date || b.next_due_date || ''));
+        tileTasksForEmail.overdue = sortedOverdue;
 
         overdueList.innerHTML = sortedOverdue.length > 0
             ? sortedOverdue.map(renderTileTaskItem).join('')
@@ -3398,6 +3545,7 @@ function renderTaskTiles(todayTasks, overdueTasks, noDueDateTasks, inProcessTask
     const noDueDateList = document.getElementById('noDueDateTileList');
     if (noDueDateList) {
         const sortedNoDueDate = [...noDueDateTasks];
+        tileTasksForEmail.no_due_date = sortedNoDueDate;
 
         noDueDateList.innerHTML = sortedNoDueDate.length > 0
             ? sortedNoDueDate.map(renderTileTaskItem).join('')
@@ -3413,20 +3561,105 @@ function renderTaskTiles(todayTasks, overdueTasks, noDueDateTasks, inProcessTask
                 const bDate = b.expected_completion_date || b.due_date || b.next_due_date || '9999-12-31';
                 return aDate.localeCompare(bDate);
             });
+        tileTasksForEmail.in_process = sortedInProcess;
+
         inProcessList.innerHTML = sortedInProcess.length > 0
             ? sortedInProcess.map(renderInProcessTileItem).join('')
             : '<div style="text-align: center; color: #999; padding: 15px; font-size: 13px;">No tasks in process</div>';
     }
 
-    // Work Plan Tile (all tasks; list has scroll for >5)
+    // Work Plan Tile (ignores Overview period)
     const workPlanList = document.getElementById('workPlanTileList');
     if (workPlanList) {
-        const sortedWorkPlan = [...workPlanTasks]
+        const sortedWorkPlan = [...(workPlanTasksForTile || [])]
             .sort((a, b) => (a.task_name || '').localeCompare(b.task_name || ''));
+        tileTasksForEmail.work_plan = sortedWorkPlan;
 
         workPlanList.innerHTML = sortedWorkPlan.length > 0
             ? sortedWorkPlan.map(renderTileTaskItem).join('')
             : '<div style="text-align: center; color: #999; padding: 15px; font-size: 13px;">No work plan tasks</div>';
+    }
+
+    const nextDayList = document.getElementById('nextWorkingDayTileList');
+    if (nextDayList) {
+        const sortedNext = [...(nextWorkingDayTasks || [])].sort((a, b) => {
+            const priorityOrder = { high: 1, medium: 2, low: 3 };
+            const ap = priorityOrder[a.priority] || 4;
+            const bp = priorityOrder[b.priority] || 4;
+            if (ap !== bp) return ap - bp;
+            return (a.task_name || '').localeCompare(b.task_name || '');
+        });
+        tileTasksForEmail.next_working_day = sortedNext;
+
+        nextDayList.innerHTML = sortedNext.length > 0
+            ? sortedNext.map(renderTileTaskItem).join('')
+            : '<div style="text-align: center; color: #999; padding: 15px; font-size: 13px;">No tasks for next working day</div>';
+    }
+
+    const reportToList = document.getElementById('reportToSelfTileList');
+    if (reportToList) {
+        const sortedRt = [...(reportToSelfTasks || [])].sort((a, b) =>
+            (a.task_name || '').localeCompare(b.task_name || '')
+        );
+        tileTasksForEmail.report_to_self = sortedRt;
+
+        reportToList.innerHTML = sortedRt.length > 0
+            ? sortedRt.map(renderReportToTileItem).join('')
+            : '<div style="text-align: center; color: #999; padding: 15px; font-size: 13px;">No tasks with Report to</div>';
+    }
+
+    window.__dashboardOverviewTileTasks = tileTasksForEmail;
+}
+
+const OVERVIEW_TILE_EMAIL_LABELS = {
+    today: "Today's Work",
+    overdue: 'Overdue',
+    no_due_date: 'No Due Date',
+    in_process: 'In Process',
+    work_plan: 'Work Plan',
+    next_working_day: 'Next working day',
+    report_to_self: 'Report to (my tasks)',
+};
+
+async function sendOverviewTileEmailSummary(tileKey) {
+    if (!currentUser) return;
+    if (currentUser.isMaster) {
+        alert('Master account cannot send tenant task emails.');
+        return;
+    }
+    const tasks = (window.__dashboardOverviewTileTasks && window.__dashboardOverviewTileTasks[tileKey]) || [];
+    if (tasks.length === 0) {
+        alert('No tasks in this tile.');
+        return;
+    }
+    const label = OVERVIEW_TILE_EMAIL_LABELS[tileKey] || 'Overview';
+    if (!isApiMode()) {
+        sendEmailViaOutlook(tasks, `Overview: ${label}`, 'dashboard');
+        return;
+    }
+    const recipients = buildInteractiveEmailRecipientsPayload(tasks);
+    if (recipients.length === 0) {
+        alert('No assignees found for these tasks.');
+        return;
+    }
+    try {
+        const res = await apiFetch('/api/workspace/email-task-view-summary', {
+            method: 'POST',
+            body: JSON.stringify({ recipients }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            alert(j.error || `Request failed (${res.status})`);
+            return;
+        }
+        const okCount = (j.sent && j.sent.length) || 0;
+        const errPart = Array.isArray(j.errors) && j.errors.length
+            ? ` Some could not be sent: ${j.errors.map(e => `${e.userId}: ${e.error}`).join('; ')}`
+            : '';
+        alert(`Sent ${okCount} email(s).${errPart}`);
+    } catch (e) {
+        console.error(e);
+        alert('Network error.');
     }
 }
 
@@ -4978,6 +5211,8 @@ function saveTaskCompletion(event) {
             }
         });
 
+        logUserActivity('task_complete', 'task', taskId, `Completion: ${completionType}`);
+
         closeCompletionDateModal();
         processRecurringTasks();
         renderTasks();
@@ -5028,6 +5263,7 @@ function acceptTaskCompletion(taskId) {
     const raw = prompt('Admin comment (OK for default):', defaultComment);
     if (raw === null) return;
     const adminComment = (raw.trim() || defaultComment).trim();
+    const wasNeedImprovement = !!(task && task.task_action === 'completed_need_improvement');
 
     updateData(data => {
         const task = data.tasks.find(t => t.id == taskId);
@@ -5044,6 +5280,24 @@ function acceptTaskCompletion(taskId) {
     renderDashboard();
     renderCalendar();
     renderInteractiveDashboard();
+
+    logUserActivity('task_accept', 'task', taskId, 'Admin finalized task completion');
+
+    if (isApiMode() && currentUser && currentUser.role === 'admin' && !currentUser.isMaster &&
+        currentUser.smtpConfigured && wasNeedImprovement && adminComment) {
+        void (async () => {
+            const ok = await flushWorkspaceToApiNow();
+            if (!ok) return;
+            try {
+                await apiFetch('/api/workspace/notify-task-need-improvement-finalized', {
+                    method: 'POST',
+                    body: JSON.stringify({ taskId: Number(taskId) }),
+                });
+            } catch (e) {
+                console.error('Need improvement finalized email failed:', e);
+            }
+        })();
+    }
 }
 
 // Mark task as In Process with expected completion date
@@ -5153,6 +5407,8 @@ function removeTaskWithoutCompletion(taskId) {
             // Don't set completed_at - task is removed, not completed
         }
     });
+
+    logUserActivity('task_remove', 'task', taskId, String(comment || '').slice(0, 200));
 
     processRecurringTasks();
     renderTasks();
@@ -5310,6 +5566,8 @@ function rejectTaskCompletion(taskId) {
             task.comment = null;
         }
     });
+
+    logUserActivity('task_reject', 'task', taskId, String(adminComment || '').slice(0, 200));
 
     renderTasks();
     renderDashboard();
@@ -7692,6 +7950,14 @@ function renderSettings() {
                     <input type="number" id="masterSessionIdleMinutes" class="form-control" min="0" max="10080" step="1" style="max-width:140px;">
                     <p style="color:#666;font-size:12px;margin-top:4px;">0 = disabled. The server signs users out after this many minutes without API activity (JWT may still be unexpired).</p>
                 </div>
+                <h3 style="margin-top:20px;">Email notifications (templates &amp; CC)</h3>
+                <p style="color:#666;font-size:13px;">Optional custom HTML and subjects for automated emails. Leave fields blank to use the built-in layout. CC addresses receive copies of status emails (assignments, rejections, Task View summaries, reminders, need-improvement finalized, password reset, welcome).</p>
+                <div class="form-group">
+                    <label for="masterStatusEmailCc">CC addresses (comma or newline separated)</label>
+                    <textarea id="masterStatusEmailCc" class="form-control" rows="2" placeholder="ops@company.com"></textarea>
+                </div>
+                <div id="masterEmailTemplatesWrap" style="margin-top:12px;"></div>
+                <button type="button" class="btn btn-secondary" style="margin-bottom:16px;" onclick="saveMasterEmailSettings()">Save email settings</button>
                 <button type="button" class="btn btn-primary" onclick="saveMasterRegistrationPolicy()">Save registration rules</button>
                 <h3 style="margin-top:24px;">Pending approval requests</h3>
                 <p style="color:#666;font-size:13px;">Users who don't match email/domain rules can request approval. Approving adds their email to the allowed list.</p>
@@ -7881,6 +8147,25 @@ function renderSettings() {
         }
     }
 
+    const actCard = document.getElementById('settingsActivityLogCard');
+    const actUser = document.getElementById('settingsActivityLogUserBlock');
+    const actMaster = document.getElementById('settingsActivityLogMasterBlock');
+    if (actCard && actUser && actMaster) {
+        if (isApiMode() && currentUser) {
+            actCard.style.display = 'block';
+            if (currentUser.isMaster) {
+                actUser.style.display = 'none';
+                actMaster.style.display = 'block';
+            } else {
+                actUser.style.display = 'block';
+                actMaster.style.display = 'none';
+                void loadActivityLogForSettings();
+            }
+        } else {
+            actCard.style.display = 'none';
+        }
+    }
+
     renderReminderPrefsSection();
 }
 
@@ -8063,6 +8348,114 @@ async function saveAdminReminderPref(userId) {
     }
 }
 
+const MASTER_EMAIL_TYPE_LABELS = {
+    task_view_summary: 'Task View summary',
+    task_assigned: 'Task assigned / created',
+    task_rejected: 'Completion rejected (needs revision)',
+    reminder: 'Daily reminder',
+    account_created: 'Account created (welcome)',
+    password_reset: 'Password reset code',
+    need_improvement_finalized: 'Needs improvement — admin finalized',
+};
+
+const MASTER_EMAIL_TYPE_HELP = {
+    task_view_summary: '{{userName}} {{taskCount}} {{generatedLine}} — use {{taskRows}} for table rows only, or {{defaultBody}} for full default email.',
+    task_assigned: '{{assigneeName}} {{taskTitle}} {{dueDateFormatted}} {{assignerName}} {{isSelf}} {{eventKind}} {{isSelfText}} {{defaultBody}}',
+    task_rejected: '{{assigneeName}} {{taskTitle}} {{adminComment}} {{adminName}} {{defaultBody}}',
+    reminder: '{{userName}} {{totalCount}} {{defaultBody}}',
+    account_created: '{{userName}} {{source}} {{contextHtml}} {{defaultBody}}',
+    password_reset: '{{userName}} {{code}} {{defaultBody}}',
+    need_improvement_finalized: '{{assigneeName}} {{taskTitle}} {{adminComment}} {{adminName}} {{taskRows}} {{generatedLine}} {{defaultBody}}',
+};
+
+async function masterEmailSettingsHydrate() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const wrap = document.getElementById('masterEmailTemplatesWrap');
+    if (!wrap) return;
+    try {
+        const res = await apiFetch('/api/master/email-settings');
+        if (!res.ok) {
+            wrap.innerHTML = '<p style="color:#c00;font-size:13px;">Could not load email settings.</p>';
+            return;
+        }
+        const data = await res.json();
+        const ccEl = document.getElementById('masterStatusEmailCc');
+        if (ccEl && Array.isArray(data.statusEmailCc)) {
+            ccEl.value = data.statusEmailCc.join(', ');
+        }
+        const keys = Array.isArray(data.templateKeys) ? data.templateKeys : [];
+        const tpl = data.emailTemplates && typeof data.emailTemplates === 'object' ? data.emailTemplates : {};
+        wrap.innerHTML = keys
+            .map((k) => {
+                const label = MASTER_EMAIL_TYPE_LABELS[k] || k;
+                const help = MASTER_EMAIL_TYPE_HELP[k] || '';
+                const safeK = String(k).replace(/[^a-zA-Z0-9_-]/g, '_');
+                return `
+                <div class="form-group" style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee;">
+                    <h4 style="font-size:14px;margin:0 0 8px;">${escapeHtml(label)}</h4>
+                    <p style="font-size:11px;color:#888;margin:0 0 6px;">${escapeHtml(help)}</p>
+                    <label style="font-size:12px;">Subject (optional)</label>
+                    <input type="text" id="masterEmailSubj_${safeK}" class="form-control" style="margin-bottom:6px;font-size:13px;" data-template-key="${escapeHtml(k)}" />
+                    <label style="font-size:12px;">Body HTML (optional)</label>
+                    <textarea id="masterEmailBody_${safeK}" class="form-control" rows="5" style="font-size:12px;font-family:monospace;" data-template-key="${escapeHtml(k)}"></textarea>
+                </div>`;
+            })
+            .join('');
+        for (const k of keys) {
+            const safeK = String(k).replace(/[^a-zA-Z0-9_-]/g, '_');
+            const subjEl = document.getElementById(`masterEmailSubj_${safeK}`);
+            const bodyEl = document.getElementById(`masterEmailBody_${safeK}`);
+            const entry = tpl[k];
+            if (subjEl) subjEl.value = entry && entry.subject ? entry.subject : '';
+            if (bodyEl) bodyEl.value = entry && entry.bodyHtml ? entry.bodyHtml : '';
+        }
+    } catch (e) {
+        console.error(e);
+        wrap.innerHTML = '<p style="color:#c00;font-size:13px;">Error loading email settings.</p>';
+    }
+}
+
+async function saveMasterEmailSettings() {
+    if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
+    const wrap = document.getElementById('masterEmailTemplatesWrap');
+    if (!wrap) return;
+    const ccRaw = (document.getElementById('masterStatusEmailCc') && document.getElementById('masterStatusEmailCc').value) || '';
+    const statusEmailCc = ccRaw.split(/[\n,;]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+    let templateKeys = Object.keys(MASTER_EMAIL_TYPE_LABELS);
+    try {
+        const cur = await apiFetch('/api/master/email-settings');
+        if (cur.ok) {
+            const j = await cur.json();
+            if (Array.isArray(j.templateKeys) && j.templateKeys.length) templateKeys = j.templateKeys;
+        }
+    } catch (_) { /* use defaults */ }
+    const emailTemplates = {};
+    for (const k of templateKeys) {
+        const safeK = String(k).replace(/[^a-zA-Z0-9_-]/g, '_');
+        const subjEl = document.getElementById(`masterEmailSubj_${safeK}`);
+        const bodyEl = document.getElementById(`masterEmailBody_${safeK}`);
+        emailTemplates[k] = {
+            subject: subjEl ? String(subjEl.value || '').trim() : '',
+            bodyHtml: bodyEl ? String(bodyEl.value || '').trim() : '',
+        };
+    }
+    try {
+        const res = await apiFetch('/api/master/email-settings', {
+            method: 'PUT',
+            body: JSON.stringify({ statusEmailCc, emailTemplates }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Could not save email settings.');
+            return;
+        }
+        alert('Email settings saved.');
+    } catch (e) {
+        console.error(e);
+        alert('Request failed.');
+    }
+}
+
 async function masterRegistrationPolicyHydrate() {
     if (!isApiMode() || !currentUser || !currentUser.isMaster) return;
     const rOpen = document.getElementById('masterRegModeOpen');
@@ -8093,6 +8486,7 @@ async function masterRegistrationPolicyHydrate() {
         console.error(e);
     }
     masterLoadApprovalRequests();
+    void masterEmailSettingsHydrate();
 }
 
 async function masterLoadApprovalRequests() {

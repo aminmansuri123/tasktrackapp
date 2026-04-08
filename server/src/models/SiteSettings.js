@@ -28,6 +28,10 @@ const siteSettingsSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    /** CC on automated status / notification emails (master-managed). */
+    statusEmailCc: { type: [String], default: [] },
+    /** Per-type subject + HTML body with {{placeholders}} — see master email settings UI. */
+    emailTemplates: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }
 );

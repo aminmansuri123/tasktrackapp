@@ -11,6 +11,9 @@ const {
   sanitizePolicyBody,
   sanitizeBlockedLists,
   sanitizeReportToOptions,
+  sanitizeStatusEmailCc,
+  sanitizeEmailTemplatesDocument,
+  EMAIL_TEMPLATE_KEYS,
 } = require('../services/registrationPolicy');
 const { allocateUniqueUserId } = require('../services/userSync');
 const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
@@ -394,6 +397,40 @@ router.get('/registration-policy', authMiddleware, requireMaster, async (_req, r
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load registration policy' });
+  }
+});
+
+router.get('/email-settings', authMiddleware, requireMaster, async (_req, res) => {
+  try {
+    const s = await getSiteSettings();
+    return res.json({
+      statusEmailCc: Array.isArray(s.statusEmailCc) ? s.statusEmailCc : [],
+      emailTemplates: s.emailTemplates && typeof s.emailTemplates === 'object' ? s.emailTemplates : {},
+      templateKeys: EMAIL_TEMPLATE_KEYS,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load email settings' });
+  }
+});
+
+router.put('/email-settings', authMiddleware, requireMaster, async (req, res) => {
+  try {
+    const s = await getSiteSettings();
+    if (req.body && req.body.statusEmailCc !== undefined) {
+      s.statusEmailCc = sanitizeStatusEmailCc(req.body || {});
+    }
+    if (req.body && req.body.emailTemplates !== undefined) {
+      s.emailTemplates = sanitizeEmailTemplatesDocument(req.body.emailTemplates);
+    }
+    await s.save();
+    return res.json({
+      statusEmailCc: s.statusEmailCc,
+      emailTemplates: s.emailTemplates,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to save email settings' });
   }
 });
 

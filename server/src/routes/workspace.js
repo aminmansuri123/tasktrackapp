@@ -13,6 +13,7 @@ const {
   sendTaskRejectedEmail,
   sendAccountCreatedEmail,
   sendTaskViewSummaryEmail,
+  sendNeedImprovementFinalizedEmail,
 } = require('../services/emailService');
 const { EMAIL_CONFIGURED } = require('../config');
 const {
@@ -34,7 +35,7 @@ const { formatLastLoginAtDisplay } = require('../lib/lastLoginFormat');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '17.2.4';
+const EXPORT_VERSION = '17.4.0';
 
 function isLegacyFlatJournal(j) {
   if (!j || typeof j !== 'object' || Array.isArray(j)) return false;
@@ -94,6 +95,23 @@ function mergeArrayByCreatedBy(existing, incoming, userId) {
   });
   const mine = inc.filter((item) => item && Number(item.created_by) === uid);
   return [...rest, ...mine];
+}
+
+/** Avoid wiping a user's template blocks when the client sends an empty array (race / stale state). */
+function mergeTemplateBlocksById(existing, incoming, userId) {
+  const uid = Number(userId);
+  const ex = Array.isArray(existing) ? existing : [];
+  const inc = Array.isArray(incoming) ? incoming : [];
+  const rest = ex.filter((item) => {
+    const cb = item && item.created_by != null ? Number(item.created_by) : null;
+    return cb !== uid;
+  });
+  const mineExisting = ex.filter((item) => item && Number(item.created_by) === uid);
+  const mineInc = inc.filter((item) => item && Number(item.created_by) === uid);
+  if (mineInc.length === 0) {
+    return [...rest, ...mineExisting];
+  }
+  return [...rest, ...mineInc];
 }
 
 /** Migrate legacy shared journal + items without created_by (assign to tenant root). */
@@ -747,7 +765,7 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
         incoming.codeSnippets,
         req.user.userId
       );
-      merged.templateBlocks = mergeArrayByCreatedBy(
+      merged.templateBlocks = mergeTemplateBlocksById(
         existingNormalized.templateBlocks,
         incoming.templateBlocks,
         req.user.userId
@@ -795,7 +813,7 @@ router.put('/', authMiddleware, validateBody(workspacePutSchema), async (req, re
         incoming.codeSnippets,
         req.user.userId
       );
-      merged.templateBlocks = mergeArrayByCreatedBy(
+      merged.templateBlocks = mergeTemplateBlocksById(
         existingNormalized.templateBlocks,
         incoming.templateBlocks,
         req.user.userId
@@ -1065,6 +1083,59 @@ router.post('/notify-task-rejected', authMiddleware, async (req, res) => {
     return res.json({ ok: true });
   } catch (e) {
     console.error('notify-task-rejected error:', e);
+    return res.json({ ok: true, skipped: true });
+  }
+});
+
+router.post('/notify-task-need-improvement-finalized', authMiddleware, async (req, res) => {
+  if (!EMAIL_CONFIGURED) return res.json({ ok: true, skipped: true });
+  try {
+    if (req.user.isMaster || req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin only' });
+    }
+    const taskId = parseInt(String(req.body?.taskId), 10);
+    if (Number.isNaN(taskId)) return res.status(400).json({ error: 'Invalid taskId' });
+
+    const tenantRoot = resolveTenantRoot(req);
+    if (tenantRoot == null) return res.status(400).json({ error: 'No tenant' });
+
+    await ensureWorkspaceForTenantRoot(tenantRoot);
+    const ws = await Workspace.findOne({ tenantRootUserId: tenantRoot });
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+
+    const data = normalizeWorkspacePayload(ws.data);
+    const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const task = tasks.find((t) => Number(t.id) === taskId);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    if (task.task_action !== 'completed_need_improvement' || !task.admin_finalized) {
+      return res.json({ ok: true, skipped: true });
+    }
+    const adminComment = String(task.admin_comment || '').trim();
+    if (!adminComment) return res.json({ ok: true, skipped: true });
+
+    const assigneeId = Number(task.assigned_to);
+    if (!assigneeId) return res.json({ ok: true, skipped: true });
+
+    const assignee = await User.findOne({ userId: assigneeId }).lean();
+    if (!assignee || !assignee.email) return res.json({ ok: true, skipped: true });
+    if (!userInTenantWorkspace(tenantRoot, assignee)) {
+      return res.status(403).json({ error: 'Assignee not in organisation' });
+    }
+
+    const admin = await User.findOne({ userId: req.user.userId }).lean();
+    const adminName = admin ? admin.name || admin.email : 'Admin';
+
+    await sendNeedImprovementFinalizedEmail(
+      assignee.email,
+      assignee.name || assignee.email,
+      task.task_name || '(untitled)',
+      adminComment,
+      adminName
+    );
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('notify-task-need-improvement-finalized error:', e);
     return res.json({ ok: true, skipped: true });
   }
 });

@@ -24,6 +24,7 @@ const authRoutes = require('./routes/auth');
 const workspaceRoutes = require('./routes/workspace');
 const attachmentsRoutes = require('./routes/attachments');
 const masterRoutes = require('./routes/master');
+const activityLogRoutes = require('./routes/activityLog');
 const { startReminderCron } = require('./services/reminderCron');
 
 async function ensureMasterUser() {
@@ -219,6 +220,7 @@ async function main() {
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   app.use('/api/auth', authLimiter, authRoutes);
+  app.use('/api/activity-log', workspaceLimiter, activityLogRoutes);
   app.use('/api/workspace', workspaceLimiter, workspaceRoutes);
   app.use('/api/attachments', attachmentsLimiter, attachmentsRoutes);
   app.use('/api/master', masterLimiter, masterRoutes);

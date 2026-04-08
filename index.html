@@ -1397,7 +1397,7 @@
         <div class="header">
             <div class="header-title-block">
                 <span class="header-title-main">📋 Task Management System</span>
-                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v17.3.1</span></span>
+                <span class="header-title-meta"><strong>Developed by</strong> Amin Mansuri <span class="ver-pill" id="headerAppVersion">v17.4.0</span></span>
             </div>
             <div class="header-global-search" style="flex:1;max-width:280px;margin:0 12px;position:relative;">
                 <input type="search" id="globalSearchInput" class="form-control" placeholder="Search tasks, notes, users, version…" autocomplete="off" style="width:100%;" title="Search across the app">
@@ -1490,8 +1490,9 @@
                         <div class="task-tile"
                             style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #667eea;">
                             <h4
-                                style="color: #667eea; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
-                                <span>📅</span> Today's Work
+                                style="color: #667eea; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                <span style="display: flex; align-items: center; gap: 8px;"><span>📅</span> Today's Work</span>
+                                <button type="button" class="overview-tile-email-btn" onclick="event.stopPropagation(); sendOverviewTileEmailSummary('today')" title="Email task summary to assignees" style="background:none;border:none;cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:0.85;" aria-label="Email summary">✉</button>
                             </h4>
                             <div id="todayWorkTileList" class="task-overview-tile-list">
                                 <!-- Will be populated by JavaScript -->
@@ -1502,8 +1503,9 @@
                         <div class="task-tile"
                             style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #dc3545;">
                             <h4
-                                style="color: #dc3545; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
-                                <span>⚠️</span> Overdue
+                                style="color: #dc3545; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                <span style="display: flex; align-items: center; gap: 8px;"><span>⚠️</span> Overdue</span>
+                                <button type="button" class="overview-tile-email-btn" onclick="event.stopPropagation(); sendOverviewTileEmailSummary('overdue')" title="Email task summary to assignees" style="background:none;border:none;cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:0.85;" aria-label="Email summary">✉</button>
                             </h4>
                             <div id="overdueTileList" class="task-overview-tile-list">
                                 <!-- Will be populated by JavaScript -->
@@ -1514,8 +1516,9 @@
                         <div class="task-tile"
                             style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #6c757d;">
                             <h4
-                                style="color: #6c757d; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
-                                <span>📋</span> No Due Date
+                                style="color: #6c757d; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                <span style="display: flex; align-items: center; gap: 8px;"><span>📋</span> No Due Date</span>
+                                <button type="button" class="overview-tile-email-btn" onclick="event.stopPropagation(); sendOverviewTileEmailSummary('no_due_date')" title="Email task summary to assignees" style="background:none;border:none;cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:0.85;" aria-label="Email summary">✉</button>
                             </h4>
                             <div id="noDueDateTileList" class="task-overview-tile-list">
                                 <!-- Will be populated by JavaScript -->
@@ -1526,8 +1529,9 @@
                         <div class="task-tile"
                             style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #17a2b8;">
                             <h4
-                                style="color: #17a2b8; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
-                                <span>🔄</span> In Process
+                                style="color: #17a2b8; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                <span style="display: flex; align-items: center; gap: 8px;"><span>🔄</span> In Process</span>
+                                <button type="button" class="overview-tile-email-btn" onclick="event.stopPropagation(); sendOverviewTileEmailSummary('in_process')" title="Email task summary to assignees" style="background:none;border:none;cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:0.85;" aria-label="Email summary">✉</button>
                             </h4>
                             <div id="inProcessTileList" class="task-overview-tile-list">
                                 <!-- Will be populated by JavaScript -->
@@ -1538,11 +1542,36 @@
                         <div class="task-tile"
                             style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #28a745;">
                             <h4
-                                style="color: #28a745; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
-                                <span>📊</span> Work Plan
+                                style="color: #28a745; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                <span style="display: flex; align-items: center; gap: 8px;"><span>📊</span> Work Plan</span>
+                                <button type="button" class="overview-tile-email-btn" onclick="event.stopPropagation(); sendOverviewTileEmailSummary('work_plan')" title="Email task summary to assignees" style="background:none;border:none;cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:0.85;" aria-label="Email summary">✉</button>
                             </h4>
                             <div id="workPlanTileList" class="task-overview-tile-list">
                                 <!-- Will be populated by JavaScript -->
+                            </div>
+                        </div>
+
+                        <!-- Next working day Tile -->
+                        <div class="task-tile"
+                            style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #6f42c1;">
+                            <h4
+                                style="color: #6f42c1; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                <span id="nextWorkingDayTileTitle" style="display: flex; align-items: center; gap: 8px;"><span>📆</span> Next working day</span>
+                                <button type="button" class="overview-tile-email-btn" onclick="event.stopPropagation(); sendOverviewTileEmailSummary('next_working_day')" title="Email task summary to assignees" style="background:none;border:none;cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:0.85;" aria-label="Email summary">✉</button>
+                            </h4>
+                            <div id="nextWorkingDayTileList" class="task-overview-tile-list">
+                            </div>
+                        </div>
+
+                        <!-- Report to (self) Tile -->
+                        <div class="task-tile"
+                            style="background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-left: 4px solid #fd7e14;">
+                            <h4
+                                style="color: #fd7e14; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                                <span style="display: flex; align-items: center; gap: 8px;"><span>👤</span> Report to <span style="font-size:12px;font-weight:400;color:#888;">(my tasks)</span></span>
+                                <button type="button" class="overview-tile-email-btn" onclick="event.stopPropagation(); sendOverviewTileEmailSummary('report_to_self')" title="Email task summary to assignees" style="background:none;border:none;cursor:pointer;font-size:18px;padding:2px 6px;line-height:1;opacity:0.85;" aria-label="Email summary">✉</button>
+                            </h4>
+                            <div id="reportToSelfTileList" class="task-overview-tile-list">
                             </div>
                         </div>
                     </div>
@@ -2260,6 +2289,19 @@
                     <div id="reminderPrefsContent"></div>
                 </div>
 
+                <div class="card" style="margin-bottom: 20px; display: none;" id="settingsActivityLogCard">
+                    <h3>Activity log</h3>
+                    <div id="settingsActivityLogUserBlock">
+                        <p style="font-size:13px;color:#666;">Actions recorded for your account only (other users cannot see your entries).</p>
+                        <div id="settingsActivityLogList" style="max-height:260px;overflow:auto;font-size:13px;margin-top:8px;"></div>
+                        <button type="button" class="btn btn-secondary" style="margin-top:10px;" onclick="loadActivityLogForSettings()">Refresh</button>
+                    </div>
+                    <div id="settingsActivityLogMasterBlock" style="display:none;">
+                        <p style="font-size:13px;color:#666;">Delete all activity log entries for every user (cannot be undone).</p>
+                        <button type="button" class="btn btn-danger" style="margin-top:10px;" onclick="masterClearAllActivityLogs()">Clear all activity logs</button>
+                    </div>
+                </div>
+
                 <div class="card danger-zone admin-only">
                     <h3>Danger Zone (Admin Only)</h3>
                     <p style="color: #dc3545; margin-bottom: 15px;">Permanently delete all application data. This action
@@ -2276,7 +2318,7 @@
 
         <footer class="app-footer" role="contentinfo">
             <p>Developed by — Amin Mansuri</p>
-            <p class="app-footer-version">Version <span id="appFooterVersion">17.3.1</span></p>
+            <p class="app-footer-version">Version <span id="appFooterVersion">17.4.0</span></p>
         </footer>
     </div>
 
@@ -2360,7 +2402,7 @@
                     <div id="loginError" style="margin-top: 15px;"></div>
                     <div class="login-panel-attribution">
                         <p><strong>Developed by</strong> Amin Mansuri</p>
-                        <p class="login-version-line">Version <span id="loginFooterVersion">17.3.1</span></p>
+                        <p class="login-version-line">Version <span id="loginFooterVersion">17.4.0</span></p>
                     </div>
                 </div>
             </div>
@@ -3079,7 +3121,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=17.3.1"></script>
+    <script src="app.js?v=17.4.0"></script>
 </body>
 
 </html>
