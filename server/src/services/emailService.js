@@ -71,6 +71,35 @@ function interpolateEmailTemplate(str, vars) {
   return out;
 }
 
+const UNRESOLVED_PLACEHOLDER_RE = /\{\{\s*[a-zA-Z0-9_]+\s*\}\}/;
+
+function emailBodyLooksBroken(html) {
+  if (html == null) return true;
+  const s = String(html).trim();
+  if (!s) return true;
+  return UNRESOLVED_PLACEHOLDER_RE.test(s);
+}
+
+function pickEmailSubjectAfterTemplate(customSubjectTpl, plainVars, defaultSubject, logLabel) {
+  if (!customSubjectTpl || !String(customSubjectTpl).trim()) return defaultSubject;
+  const s = interpolateEmailTemplate(customSubjectTpl, plainVars).trim();
+  if (!s || UNRESOLVED_PLACEHOLDER_RE.test(s)) {
+    console.warn(`[email] Subject template for ${logLabel} failed or left placeholders; using default.`);
+    return defaultSubject;
+  }
+  return s;
+}
+
+function pickEmailHtmlAfterTemplate(customBodyTpl, htmlVars, defaultBody, logLabel) {
+  if (!customBodyTpl || !String(customBodyTpl).trim()) return defaultBody;
+  const html = interpolateEmailTemplate(customBodyTpl, htmlVars);
+  if (emailBodyLooksBroken(html)) {
+    console.warn(`[email] Body template for ${logLabel} empty or unreplaced {{vars}}; using built-in layout.`);
+    return defaultBody;
+  }
+  return html;
+}
+
 async function sendMailResend(toEmail, subject, html, ccList = []) {
   const payload = {
     from: resendFromHeader(),
@@ -231,12 +260,22 @@ function formatDate(dateStr) {
   return d.toLocaleDateString('en-IN', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+function reminderTaskStatusLabel(task) {
+  const a = task.task_action;
+  if (a === 'completed') return 'Completed';
+  if (a === 'completed_need_improvement') return 'Needs improvement';
+  if (a === 'not_done') return 'Not done';
+  if (a === 'in_process') return 'In process';
+  if (a === 'not_completed' || !a) return 'Pending';
+  return String(a).replace(/_/g, ' ');
+}
+
 function buildTaskRow(task, type) {
   const color = type === 'overdue' ? '#e74c3c' : '#f39c12';
   const label = type === 'overdue' ? 'Overdue' : 'Due Tomorrow';
-  const title = task.title || task.task_name || '(untitled)';
+  const title = escapeHtml(task.title || task.task_name || '(untitled)');
   const due = formatDate(task.due_date || task.next_due_date);
-  const status = task.status || 'pending';
+  const status = escapeHtml(reminderTaskStatusLabel(task));
   return `
     <tr>
       <td style="padding:8px 12px;border-bottom:1px solid #eee;">${title}</td>
@@ -259,7 +298,7 @@ function buildReminderHtml(userName, overdueTasks, upcomingTasks) {
   <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
     <div style="background:#2563eb;color:#fff;padding:20px 24px;">
       <h1 style="margin:0;font-size:20px;">Task Reminder</h1>
-      <p style="margin:6px 0 0;font-size:14px;opacity:0.9;">Hello ${userName}, you have ${totalCount} task${totalCount !== 1 ? 's' : ''} that need attention.</p>
+      <p style="margin:6px 0 0;font-size:14px;opacity:0.9;">Hello ${escapeHtml(userName)}, you have ${totalCount} task${totalCount !== 1 ? 's' : ''} that need attention.</p>
     </div>
     <div style="padding:20px 24px;">
       ${overdueTasks.length > 0 ? `
@@ -296,8 +335,11 @@ async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTa
   if (!isEmailEnabled()) return false;
 
   const total = overdueTasks.length + upcomingTasks.length;
+  const namePart = (userName || '').trim() || 'there';
   const defaultSubject =
-    total === 1 ? 'Task Reminder: 1 task needs attention' : `Task Reminder: ${total} tasks need attention`;
+    total === 1
+      ? `${namePart} — Task reminder: 1 task needs attention`
+      : `${namePart} — Task reminder: ${total} tasks need attention`;
   const tpl = await getEmailTemplatePair('reminder');
   const defaultBody = buildReminderHtml(userName, overdueTasks, upcomingTasks);
   const plain = { ...emailOverviewTileVarsForPlain(), userName: userName || '', totalCount: String(total) };
@@ -307,8 +349,8 @@ async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTa
     userName: escapeHtml(plain.userName),
     defaultBody,
   };
-  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
-  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
+  const subject = pickEmailSubjectAfterTemplate(tpl.subject, plain, defaultSubject, 'reminder');
+  const html = pickEmailHtmlAfterTemplate(tpl.bodyHtml, htmlVars, defaultBody, 'reminder');
 
   try {
     await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
@@ -319,25 +361,33 @@ async function sendTaskReminderEmail(toEmail, userName, overdueTasks, upcomingTa
   }
 }
 
-function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf) {
+function buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf, taskDescription) {
+  const desc = (taskDescription && String(taskDescription).trim()) || '';
+  const descBlock = desc
+    ? `<div style="margin-top:16px;padding:14px 16px;background:#f0f9ff;border-radius:8px;border-left:4px solid #0284c7;">
+        <p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#0369a1;text-transform:uppercase;letter-spacing:0.04em;">Description</p>
+        <p style="margin:0;font-size:14px;color:#0c4a6e;line-height:1.5;white-space:pre-wrap;">${escapeHtml(desc)}</p>
+      </div>`
+    : '';
   return `
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
-<body style="font-family:Arial,Helvetica,sans-serif;color:#333;margin:0;padding:20px;background:#f5f5f5;">
-  <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-    <div style="background:#16a34a;color:#fff;padding:20px 24px;">
-      <h1 style="margin:0;font-size:20px;">New Task Assigned</h1>
-      <p style="margin:6px 0 0;font-size:14px;opacity:0.9;">Hello ${escapeHtml(assigneeName)}, a task has been ${isSelf ? 'created by you' : 'assigned to you'}.</p>
+<body style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1e293b;margin:0;padding:24px 16px;background:linear-gradient(160deg,#e0f2fe 0%,#f8fafc 45%,#ecfdf5 100%);">
+  <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 24px rgba(15,23,42,0.08);border:1px solid #e2e8f0;">
+    <div style="background:linear-gradient(135deg,#0d9488 0%,#0f766e 50%,#115e59 100%);color:#fff;padding:22px 24px;">
+      <h1 style="margin:0;font-size:20px;font-weight:600;letter-spacing:-0.02em;">New task</h1>
+      <p style="margin:8px 0 0;font-size:14px;opacity:0.95;line-height:1.45;">Hello ${escapeHtml(assigneeName)}, a task has been ${isSelf ? 'created by you' : 'assigned to you'}.</p>
     </div>
-    <div style="padding:20px 24px;">
-      <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:16px;">
-        <tr><td style="padding:8px 0;font-weight:600;width:100px;">Task:</td><td style="padding:8px 0;">${escapeHtml(taskTitle || '(untitled)')}</td></tr>
-        <tr><td style="padding:8px 0;font-weight:600;">Due Date:</td><td style="padding:8px 0;">${dueDate ? formatDate(dueDate) : 'Not set'}</td></tr>
-        <tr><td style="padding:8px 0;font-weight:600;">Assigned By:</td><td style="padding:8px 0;">${isSelf ? 'Self' : escapeHtml(assignerName || 'Admin')}</td></tr>
+    <div style="padding:22px 24px;">
+      <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:8px;">
+        <tr><td style="padding:10px 0;font-weight:600;color:#64748b;width:112px;vertical-align:top;">Task</td><td style="padding:10px 0;color:#0f172a;font-weight:600;">${escapeHtml(taskTitle || '(untitled)')}</td></tr>
+        <tr><td style="padding:10px 0;font-weight:600;color:#64748b;vertical-align:top;">Due date</td><td style="padding:10px 0;color:#0f172a;">${dueDate ? formatDate(dueDate) : 'Not set'}</td></tr>
+        <tr><td style="padding:10px 0;font-weight:600;color:#64748b;vertical-align:top;">Assigned by</td><td style="padding:10px 0;color:#0f172a;">${isSelf ? 'Self' : escapeHtml(assignerName || 'Admin')}</td></tr>
       </table>
-      <p style="font-size:13px;color:#666;">${isSelf ? 'You created this task for yourself.' : `Assigned by <strong>${escapeHtml(assignerName || 'an admin')}</strong>.`}</p>
-      <p style="font-size:13px;color:#999;margin-top:16px;">This is an automated notification from your Task Management System.</p>
+      ${descBlock}
+      <p style="font-size:13px;color:#64748b;margin-top:18px;line-height:1.5;">${isSelf ? 'You created this task for yourself.' : `Assigned by <strong style="color:#334155;">${escapeHtml(assignerName || 'an admin')}</strong>.`}</p>
+      <p style="font-size:12px;color:#94a3b8;margin-top:20px;">This is an automated notification from your Task Management System.</p>
       ${emailBrandFooterHtml()}
     </div>
   </div>
@@ -353,22 +403,25 @@ async function sendTaskAssignmentEmail(
   assignerName,
   isSelf,
   eventKind,
-  tenantRootUserId
+  tenantRootUserId,
+  taskDescription
 ) {
   if (!isEmailEnabled()) return false;
 
   const title = taskTitle || '(untitled)';
+  const assigneeShort = (assigneeName || '').trim() || 'You';
   let defaultSubject;
   if (eventKind === 'reassigned' && !isSelf) {
-    defaultSubject = `Task reassigned to you: ${title}`;
+    defaultSubject = `${assigneeShort} — Task reassigned to you: ${title}`;
   } else if (isSelf) {
-    defaultSubject = `New task created: ${title}`;
+    defaultSubject = `${assigneeShort} — New task created: ${title}`;
   } else {
-    defaultSubject = `New task assigned to you: ${title}`;
+    defaultSubject = `${assigneeShort} — New task assigned: ${title}`;
   }
 
   const tpl = await getEmailTemplatePair('task_assigned');
   const dueFmt = dueDate ? formatDate(dueDate) : 'Not set';
+  const descPlain = taskDescription != null ? String(taskDescription).trim() : '';
   const plain = {
     ...emailOverviewTileVarsForPlain(),
     assigneeName: assigneeName || '',
@@ -377,20 +430,23 @@ async function sendTaskAssignmentEmail(
     assignerName: assignerName || 'Admin',
     isSelf: isSelf ? 'yes' : 'no',
     eventKind: eventKind || '',
+    taskDescription: descPlain,
   };
+  const defaultBody = buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf, descPlain);
   const htmlVars = {
     ...emailOverviewTileVarsForBody(),
     ...plain,
     assigneeName: escapeHtml(plain.assigneeName),
     taskTitle: escapeHtml(plain.taskTitle),
     assignerName: escapeHtml(plain.assignerName),
+    taskDescription: escapeHtml(descPlain),
     isSelfText: isSelf
       ? 'You created this task for yourself.'
       : `Assigned by <strong>${escapeHtml(assignerName || 'an admin')}</strong>.`,
-    defaultBody: buildAssignmentHtml(assigneeName, taskTitle, dueDate, assignerName, isSelf),
+    defaultBody,
   };
-  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
-  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
+  const subject = pickEmailSubjectAfterTemplate(tpl.subject, plain, defaultSubject, 'task_assigned');
+  const html = pickEmailHtmlAfterTemplate(tpl.bodyHtml, htmlVars, defaultBody, 'task_assigned');
 
   try {
     await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
@@ -448,8 +504,8 @@ async function sendTaskRejectedEmail(toEmail, assigneeName, taskTitle, comment, 
     adminName: escapeHtml(plain.adminName),
     defaultBody: buildTaskRejectedHtml(assigneeName, taskTitle, comment, adminName),
   };
-  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
-  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
+  const subject = pickEmailSubjectAfterTemplate(tpl.subject, plain, defaultSubject, 'task_rejected');
+  const html = pickEmailHtmlAfterTemplate(tpl.bodyHtml, htmlVars, htmlVars.defaultBody, 'task_rejected');
   try {
     await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
     return true;
@@ -499,8 +555,8 @@ async function sendAccountCreatedEmail(toEmail, userName, source) {
     contextHtml,
     defaultBody: buildAccountCreatedHtml(userName, contextHtml),
   };
-  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
-  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
+  const subject = pickEmailSubjectAfterTemplate(tpl.subject, plain, defaultSubject, 'account_created');
+  const html = pickEmailHtmlAfterTemplate(tpl.bodyHtml, htmlVars, htmlVars.defaultBody, 'account_created');
   try {
     await sendMail(toEmail, subject, html);
     return true;
@@ -543,8 +599,8 @@ async function sendPasswordResetCodeEmail(toEmail, userName, code) {
     code: escapeHtml(plain.code),
     defaultBody: buildPasswordResetCodeHtml(userName, code),
   };
-  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
-  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : htmlVars.defaultBody;
+  const subject = pickEmailSubjectAfterTemplate(tpl.subject, plain, defaultSubject, 'password_reset');
+  const html = pickEmailHtmlAfterTemplate(tpl.bodyHtml, htmlVars, htmlVars.defaultBody, 'password_reset');
   try {
     await sendMail(toEmail, subject, html);
     return true;
@@ -559,9 +615,9 @@ async function sendTestEmail(toEmail, userName, tenantRootUserId) {
     throw new Error('Email not configured. Set RESEND_API_KEY (recommended on Render) or SMTP_EMAIL + SMTP_PASSWORD.');
   }
   const demoTask = {
-    title: 'Sample Task — Test Reminder',
+    task_name: 'Sample Task — Test Reminder',
     due_date: new Date().toISOString().split('T')[0],
-    status: 'in_progress',
+    task_action: 'in_process',
   };
   await sendMailWithTenantCc(
     toEmail,
@@ -626,7 +682,8 @@ function buildTaskViewSummaryTableRows(tasks) {
     .join('');
 }
 
-function buildTaskViewSummaryEmailHtml(userName, rowsHtml, istLine) {
+function buildTaskViewSummaryEmailHtml(userName, rowsHtml, istLine, summaryIntro) {
+  const intro = summaryIntro && String(summaryIntro).trim() ? String(summaryIntro).trim() : 'Here is your Task View summary:';
   return `
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
@@ -635,7 +692,7 @@ function buildTaskViewSummaryEmailHtml(userName, rowsHtml, istLine) {
     <div style="background:#e3f2fd;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(13,71,161,0.08);border-left:5px solid #1976d2;">
       <div style="padding:22px 24px 18px;">
         <p style="margin:0 0 10px;font-size:15px;color:#0d47a1;">Hello ${escapeHtml(userName || '')},</p>
-        <p style="margin:0 0 18px;font-size:14px;color:#37474f;">Here is your Task View summary:</p>
+        <p style="margin:0 0 18px;font-size:14px;color:#37474f;">${escapeHtml(intro)}</p>
         <table style="width:100%;border-collapse:collapse;font-size:14px;background:#fff;border-radius:8px;overflow:hidden;">
           <thead>
             <tr style="background:#bbdefb;color:#0d47a1;">
@@ -654,34 +711,39 @@ function buildTaskViewSummaryEmailHtml(userName, rowsHtml, istLine) {
 </body></html>`;
 }
 
-async function sendTaskViewSummaryEmail(toEmail, userName, tasks, tenantRootUserId) {
+async function sendTaskViewSummaryEmail(toEmail, userName, tasks, tenantRootUserId, options = {}) {
   if (!isEmailEnabled()) {
     throw new Error('Email not configured');
   }
   if (!Array.isArray(tasks) || tasks.length === 0) {
     throw new Error('No tasks');
   }
+  const tileLabel = (options && options.tileLabel && String(options.tileLabel).trim()) || 'Task View';
+  const summaryIntro = `Here is your ${tileLabel} summary:`;
   const rows = buildTaskViewSummaryTableRows(tasks);
   const istLine = formatIstGeneratedLine();
-  const defaultSubject = `Task View summary (${tasks.length} task${tasks.length === 1 ? '' : 's'})`;
-  const defaultBody = buildTaskViewSummaryEmailHtml(userName, rows, istLine);
+  const namePart = (userName || '').trim() || 'User';
+  const defaultSubject = `${namePart} — ${tileLabel}: ${tasks.length} task${tasks.length === 1 ? '' : 's'}`;
+  const defaultBody = buildTaskViewSummaryEmailHtml(userName, rows, istLine, summaryIntro);
   const tpl = await getEmailTemplatePair('task_view_summary');
   const plain = {
     ...emailOverviewTileVarsForPlain(),
     userName: userName || '',
     taskCount: String(tasks.length),
     generatedLine: istLine,
+    tileLabel,
   };
   const htmlVars = {
     ...emailOverviewTileVarsForBody(),
     ...plain,
     userName: escapeHtml(plain.userName),
     generatedLine: escapeHtml(istLine),
+    tileLabel: escapeHtml(tileLabel),
     taskRows: rows,
     defaultBody,
   };
-  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
-  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
+  const subject = pickEmailSubjectAfterTemplate(tpl.subject, plain, defaultSubject, 'task_view_summary');
+  const html = pickEmailHtmlAfterTemplate(tpl.bodyHtml, htmlVars, defaultBody, 'task_view_summary');
   await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
 }
 
@@ -764,8 +826,8 @@ async function sendNeedImprovementFinalizedEmail(
     taskRows: rows,
     defaultBody,
   };
-  const subject = tpl.subject ? interpolateEmailTemplate(tpl.subject, plain) : defaultSubject;
-  const html = tpl.bodyHtml ? interpolateEmailTemplate(tpl.bodyHtml, htmlVars) : defaultBody;
+  const subject = pickEmailSubjectAfterTemplate(tpl.subject, plain, defaultSubject, 'need_improvement_finalized');
+  const html = pickEmailHtmlAfterTemplate(tpl.bodyHtml, htmlVars, defaultBody, 'need_improvement_finalized');
   try {
     await sendMailWithTenantCc(toEmail, subject, html, tenantRootUserId);
     return true;
@@ -773,6 +835,82 @@ async function sendNeedImprovementFinalizedEmail(
     console.error(`Need improvement finalized email failed for ${toEmail}:`, err.message);
     return false;
   }
+}
+
+/** Full sample HTML + suggested subject lines (with {{placeholders}}) for master “Load system default”. */
+function getMasterEmailTemplateDefaults() {
+  const sampleUser = 'Sample User';
+  const sampleAssigner = 'Admin Name';
+  const istLine = formatIstGeneratedLine();
+  const overdueSample = {
+    task_name: 'Sample overdue task',
+    task_action: 'not_completed',
+    due_date: '2020-01-15',
+  };
+  const upcomingSample = {
+    task_name: 'Sample task due tomorrow',
+    task_action: 'not_completed',
+    due_date: '2099-12-20',
+  };
+  const reminderBody = buildReminderHtml(sampleUser, [overdueSample], [upcomingSample]);
+  const taskRowsSample = buildTaskViewSummaryTableRows([
+    { title: 'Sample task in list', due: '15 Jan 2026', status: 'Pending' },
+  ]);
+  const tileSample = "Today's Work";
+  const viewBody = buildTaskViewSummaryEmailHtml(
+    sampleUser,
+    taskRowsSample,
+    istLine,
+    `Here is your ${tileSample} summary:`
+  );
+  const descSample = 'Short description of what needs to be done.';
+  const assignBody = buildAssignmentHtml(sampleUser, 'Sample task title', '2026-06-01', sampleAssigner, false, descSample);
+  const rejectedBody = buildTaskRejectedHtml(sampleUser, 'Sample task', 'Please add more detail.', sampleAssigner);
+  const niRows = buildTaskViewSummaryTableRows([{ title: 'Sample task', due: '—', status: 'Needs Improvement' }]);
+  const niBody = buildNeedImprovementFinalizedHtml(
+    sampleUser,
+    'Sample task',
+    'Please revise section 2.',
+    sampleAssigner,
+    niRows,
+    istLine
+  );
+  const welcomeBody = buildAccountCreatedHtml(
+    sampleUser,
+    '<p style="font-size:14px;color:#333;margin:0;">Your account was created successfully.</p>'
+  );
+  const resetBody = buildPasswordResetCodeHtml(sampleUser, '123456');
+
+  return {
+    reminder: {
+      subject: '{{userName}} — Task reminder: {{totalCount}} task(s)',
+      bodyHtml: reminderBody,
+    },
+    task_view_summary: {
+      subject: '{{userName}} — {{tileLabel}}: {{taskCount}} task(s)',
+      bodyHtml: viewBody,
+    },
+    task_assigned: {
+      subject: '{{assigneeName}} — New task assigned: {{taskTitle}}',
+      bodyHtml: assignBody,
+    },
+    task_rejected: {
+      subject: 'Task needs revision: {{taskTitle}}',
+      bodyHtml: rejectedBody,
+    },
+    account_created: {
+      subject: 'Your Task Tracker account is ready',
+      bodyHtml: welcomeBody,
+    },
+    password_reset: {
+      subject: 'Your password reset code: {{code}}',
+      bodyHtml: resetBody,
+    },
+    need_improvement_finalized: {
+      subject: 'Task reviewed — needs improvement: {{taskTitle}}',
+      bodyHtml: niBody,
+    },
+  };
 }
 
 module.exports = {
@@ -785,4 +923,5 @@ module.exports = {
   sendPasswordResetCodeEmail,
   sendTaskViewSummaryEmail,
   sendNeedImprovementFinalizedEmail,
+  getMasterEmailTemplateDefaults,
 };

@@ -120,13 +120,37 @@ async function dropStaleLegacyIndexes() {
   }
 }
 
+async function connectMongoWithRetry(uri, maxAttempts = 3) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await mongoose.connect(uri);
+      return;
+    } catch (e) {
+      lastErr = e;
+      const msg = e && e.message ? String(e.message) : String(e);
+      if (msg.includes('querySrv') || msg.includes('ETIMEOUT')) {
+        console.error(
+          `[mongo] Connection attempt ${attempt}/${maxAttempts} failed (DNS/SRV). If this persists, use a standard mongodb:// host-list URI instead of mongodb+srv://. Detail: ${msg}`
+        );
+      } else {
+        console.error(`[mongo] Connection attempt ${attempt}/${maxAttempts} failed: ${msg}`);
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function main() {
   if (!MONGODB_URI) {
     console.error('MONGODB_URI is required');
     process.exit(1);
   }
 
-  await mongoose.connect(MONGODB_URI);
+  await connectMongoWithRetry(MONGODB_URI);
   console.log('MongoDB connected');
   if (process.env.RENDER === 'true' && SMTP_CONFIGURED && !RESEND_API_KEY) {
     console.warn(

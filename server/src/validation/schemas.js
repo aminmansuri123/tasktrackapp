@@ -54,6 +54,12 @@ const requestApprovalSchema = z.object({
 });
 
 const emailTaskViewSummarySchema = z.object({
+  context: z
+    .object({
+      tileKey: z.string().trim().max(80).optional(),
+      tileLabel: z.string().trim().max(120).optional(),
+    })
+    .optional(),
   recipients: z
     .array(
       z.object({

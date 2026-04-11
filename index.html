@@ -342,6 +342,12 @@
             opacity: 0.7;
         }
 
+        .task-card-completed-late {
+            border-left: 4px solid #d97706;
+            background: #fff7ed;
+            opacity: 0.92;
+        }
+
         .remark-section {
             margin-top: 10px;
             padding: 10px;
@@ -2543,11 +2549,24 @@
                             <option value="last_working_day">Last Working Day of Month</option>
                         </select>
                     </div>
-                    <div class="form-group">
+                    <div class="form-group" id="weeklyWeekdayGroup" style="display: none;">
+                        <label>Day of week *</label>
+                        <select class="form-control" id="taskWeeklyWeekday">
+                            <option value="">(Legacy: same as start date + 7 days)</option>
+                            <option value="0">Sunday</option>
+                            <option value="1">Monday</option>
+                            <option value="2">Tuesday</option>
+                            <option value="3">Wednesday</option>
+                            <option value="4">Thursday</option>
+                            <option value="5">Friday</option>
+                            <option value="6">Saturday</option>
+                        </select>
+                        <small style="color: #666; font-size: 12px;">Weekly tasks repeat on this weekday until you stop recurrence.</small>
+                    </div>
+                    <div class="form-group" id="recurringDueDayGroup">
                         <label>Due Day of Month (1-31) *</label>
                         <input type="number" class="form-control" id="taskDueDay" min="1" max="31" value="1" required>
-                        <small style="color: #666; font-size: 12px;">For monthly/yearly: Day of month when task is
-                            due</small>
+                        <small style="color: #666; font-size: 12px;">For monthly / quarterly / yearly: day of month when the task is due (not used for weekly).</small>
                     </div>
                     <div class="form-group" id="recurrenceTypeGroup" style="display: none;">
                         <label>Recurrence Type</label>
@@ -3129,7 +3148,7 @@
             window.API_BASE_URL = 'https://tasktrackapp.onrender.com';
         }
     </script>
-    <script src="app.js?v=17.4.2"></script>
+    <script src="app.js?v=17.5.0"></script>
 </body>
 
 </html>

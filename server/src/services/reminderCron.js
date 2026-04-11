@@ -16,6 +16,13 @@ function tomorrowStr() {
   return d.toISOString().split('T')[0];
 }
 
+/** Matches app dashboard: task is closed for overdue/today buckets. */
+function isTaskClosedForReminder(t) {
+  if (t.removed_at) return true;
+  const a = t.task_action;
+  return a === 'completed' || a === 'completed_need_improvement' || a === 'not_done';
+}
+
 async function runReminders() {
   if (!isEmailEnabled()) return;
   console.log('[reminder-cron] Running daily task reminders…');
@@ -43,10 +50,10 @@ async function runReminders() {
       const upcoming = [];
 
       for (const t of userTasks) {
-        if (t.status === 'completed') continue;
+        if (isTaskClosedForReminder(t)) continue;
         const due = t.due_date || t.next_due_date;
         if (!due) continue;
-        if (pref.afterDueDate && due < today) overdue.push(t);
+        if (pref.afterDueDate && due < today && t.task_action !== 'in_process') overdue.push(t);
         if (pref.beforeDueDate && due === tomorrow) upcoming.push(t);
       }
 

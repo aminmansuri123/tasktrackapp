@@ -19,7 +19,7 @@ const { resolveTenantRootFromAdminPicker } = require('../services/tenantRoot');
 const { ensureWorkspaceForTenantRoot } = require('../services/ensureWorkspace');
 const ApprovalRequest = require('../models/ApprovalRequest');
 const { normalizeEmailEntry } = require('../services/registrationPolicy');
-const { isEmailEnabled, sendAccountCreatedEmail } = require('../services/emailService');
+const { isEmailEnabled, sendAccountCreatedEmail, getMasterEmailTemplateDefaults } = require('../services/emailService');
 
 const router = express.Router();
 
@@ -405,6 +405,7 @@ router.get('/email-settings', authMiddleware, requireMaster, async (_req, res) =
     return res.json({
       emailTemplates: s.emailTemplates && typeof s.emailTemplates === 'object' ? s.emailTemplates : {},
       templateKeys: EMAIL_TEMPLATE_KEYS,
+      templateDefaults: getMasterEmailTemplateDefaults(),
     });
   } catch (e) {
     console.error(e);

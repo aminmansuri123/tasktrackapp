@@ -3683,7 +3683,10 @@ async function sendOverviewTileEmailSummary(tileKey) {
     try {
         const res = await apiFetch('/api/workspace/email-task-view-summary', {
             method: 'POST',
-            body: JSON.stringify({ recipients }),
+            body: JSON.stringify({
+                context: { tileKey, tileLabel: label },
+                recipients,
+            }),
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -4133,7 +4136,7 @@ function reduceRecurringTasksForTaskMgmt(tasks, statusFilter) {
 
     const bySeriesKey = new Map();
     pool.forEach(t => {
-        const key = [t.task_name, t.assigned_to, t.location_id, t.frequency].join('::');
+        const key = [t.task_name, t.assigned_to, t.location_id, t.frequency, t.weekly_weekday ?? ''].join('::');
         const prev = bySeriesKey.get(key);
         if (!prev) {
             bySeriesKey.set(key, t);
@@ -4157,7 +4160,8 @@ function getTaskRecurrenceNumber(task, data) {
             t.task_name === task.task_name &&
             t.assigned_to === task.assigned_to &&
             t.location_id === task.location_id &&
-            t.frequency === task.frequency
+            t.frequency === task.frequency &&
+            (t.weekly_weekday ?? null) === (task.weekly_weekday ?? null)
         );
 
         if (seriesTasks.length === 0) return null;
@@ -4764,6 +4768,23 @@ function filterTasksByPendingMonth() {
     `;
 }
 
+function taskCompletedAfterDue(task) {
+    if (!task || task.task_action !== 'completed') return false;
+    if (task.task_type === 'without_due_date') return false;
+    const due = task.due_date || task.next_due_date;
+    if (!due || typeof due !== 'string') return false;
+    const parts = due.split('-');
+    if (parts.length !== 3) return false;
+    const dueD = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    dueD.setHours(0, 0, 0, 0);
+    const ca = task.completed_at;
+    if (!ca) return false;
+    const comp = new Date(ca);
+    if (Number.isNaN(comp.getTime())) return false;
+    comp.setHours(0, 0, 0, 0);
+    return comp > dueD;
+}
+
 function renderTaskItem(task, showActions = false) {
     const data = getData();
     const assignedUser = data.users.find(u => u.id === task.assigned_to);
@@ -4848,6 +4869,8 @@ function renderTaskItem(task, showActions = false) {
     if (isTaskCompleted(task)) {
         if (task.task_action === 'completed_need_improvement') {
             cardClass += ' task-card-needs-improvement';
+        } else if (task.task_action === 'completed' && taskCompletedAfterDue(task)) {
+            cardClass += ' task-card-completed-late';
         } else {
             cardClass += ' task-card-completed';
         }
@@ -5210,6 +5233,7 @@ function saveTaskCompletion(event) {
                                 t.task_name === task.task_name &&
                                 t.assigned_to === task.assigned_to &&
                                 t.frequency === task.frequency &&
+                                (t.weekly_weekday ?? null) === (task.weekly_weekday ?? null) &&
                                 (t.next_due_date === nextDueDate || t.due_date === nextDueDate) &&
                                 t.id !== task.id &&
                                 !isTaskCompleted(t)
@@ -5225,6 +5249,7 @@ function saveTaskCompletion(event) {
                                     t.task_name === task.task_name &&
                                     t.assigned_to === task.assigned_to &&
                                     t.frequency === task.frequency &&
+                                    (t.weekly_weekday ?? null) === (task.weekly_weekday ?? null) &&
                                     t.start_date // Base task has start_date
                                 ) || task;
 
@@ -5558,7 +5583,8 @@ function stopRecurringTask(taskId) {
                 t.task_name === reference.task_name &&
                 t.assigned_to === reference.assigned_to &&
                 t.location_id === reference.location_id &&
-                t.frequency === reference.frequency) {
+                t.frequency === reference.frequency &&
+                (t.weekly_weekday ?? null) === (reference.weekly_weekday ?? null)) {
                 t.recurrence_stopped = true;
             }
         });
@@ -5776,6 +5802,11 @@ function openTaskModal(taskId = null) {
             document.getElementById('taskFrequency').value = task.frequency || '';
             document.getElementById('taskDueDateType').value = task.due_date_type || 'calendar_day';
             document.getElementById('taskDueDay').value = task.due_day || 1;
+            const wwPick = document.getElementById('taskWeeklyWeekday');
+            if (wwPick) {
+                wwPick.value =
+                    task.weekly_weekday != null && task.weekly_weekday !== '' ? String(task.weekly_weekday) : '';
+            }
 
             // Auto-fill start_date if missing for recurring tasks
             if (task.task_type === 'recurring') {
@@ -5901,6 +5932,13 @@ function updateRecurrenceFields() {
     const frequency = document.getElementById('taskFrequency').value;
     const recurrenceTypeGroup = document.getElementById('recurrenceTypeGroup');
     const recurrenceIntervalGroup = document.getElementById('recurrenceIntervalGroup');
+    const weeklyWeekdayGroup = document.getElementById('weeklyWeekdayGroup');
+    const recurringDueDayGroup = document.getElementById('recurringDueDayGroup');
+    const taskDueDay = document.getElementById('taskDueDay');
+
+    if (weeklyWeekdayGroup) weeklyWeekdayGroup.style.display = frequency === 'weekly' ? 'block' : 'none';
+    if (recurringDueDayGroup) recurringDueDayGroup.style.display = frequency === 'weekly' ? 'none' : 'block';
+    if (taskDueDay) taskDueDay.required = frequency !== 'weekly';
 
     // For daily, weekly, monthly, yearly - hide interval and type fields
     if (frequency && ['daily', 'weekly', 'monthly', 'quarterly', 'halfyearly', 'yearly'].includes(frequency)) {
@@ -5946,10 +5984,42 @@ function saveTask(event) {
     } else if (taskType === 'recurring') {
         const startDate = document.getElementById('taskStartDate').value;
         const dueDateType = document.getElementById('taskDueDateType').value;
-        const dueDay = parseInt(document.getElementById('taskDueDay').value);
+        const dueDay = parseInt(document.getElementById('taskDueDay').value, 10);
+        const wwEl = document.getElementById('taskWeeklyWeekday');
+        let weeklyWeekdayVal = null;
+        if (frequency === 'weekly' && wwEl && wwEl.value !== '') {
+            const w = parseInt(wwEl.value, 10);
+            weeklyWeekdayVal = Number.isFinite(w) ? w : null;
+        }
 
         if (startDate) {
-            nextDueDate = calculateRecurringDueDate(startDate, frequency, dueDateType, dueDay);
+            nextDueDate = calculateRecurringDueDate(startDate, frequency, dueDateType, dueDay, weeklyWeekdayVal);
+        }
+    }
+
+    const weeklyWwEl = document.getElementById('taskWeeklyWeekday');
+    let savedWeeklyWeekday = null;
+    if (taskType === 'recurring' && frequency === 'weekly' && weeklyWwEl && weeklyWwEl.value !== '') {
+        const w = parseInt(weeklyWwEl.value, 10);
+        savedWeeklyWeekday = Number.isFinite(w) ? w : null;
+    }
+
+    let recurringDueDay = null;
+    let recurringWeeklyWeekday = null;
+    if (taskType === 'recurring') {
+        if (frequency === 'weekly') {
+            recurringWeeklyWeekday = savedWeeklyWeekday;
+            if (savedWeeklyWeekday != null) {
+                recurringDueDay = null;
+            } else {
+                recurringDueDay =
+                    existingTask && existingTask.due_day != null
+                        ? existingTask.due_day
+                        : parseInt(document.getElementById('taskDueDay').value, 10) || 1;
+            }
+        } else {
+            recurringDueDay = parseInt(document.getElementById('taskDueDay').value, 10);
+            recurringWeeklyWeekday = null;
         }
     }
 
@@ -5965,7 +6035,8 @@ function saveTask(event) {
             taskType === 'without_due_date' ? document.getElementById('taskPriorityNoDue').value : null,
         frequency: taskType === 'recurring' ? frequency : null,
         due_date_type: taskType === 'recurring' ? document.getElementById('taskDueDateType').value : null,
-        due_day: taskType === 'recurring' ? parseInt(document.getElementById('taskDueDay').value) : null,
+        due_day: taskType === 'recurring' ? recurringDueDay : null,
+        weekly_weekday: taskType === 'recurring' ? recurringWeeklyWeekday : null,
         start_date: taskType === 'recurring' ? document.getElementById('taskStartDate').value : null,
         recurrence_type: taskType === 'recurring' && !frequency ? document.getElementById('taskRecurrenceType').value : null,
         recurrence_interval: taskType === 'recurring' && !frequency ? parseInt(document.getElementById('taskRecurrenceInterval').value) : null,
@@ -6011,6 +6082,7 @@ function saveTask(event) {
                         t.task_name === task.task_name &&
                         t.assigned_to === task.assigned_to &&
                         t.frequency === task.frequency &&
+                        (t.weekly_weekday ?? null) === (task.weekly_weekday ?? null) &&
                         (t.next_due_date || t.due_date) &&
                         new Date(t.next_due_date || t.due_date) > today
                     );
@@ -6041,6 +6113,7 @@ function saveTask(event) {
         const assignChanged = isEdit && existingTask && Number(existingTask.assigned_to) !== assignPick;
         if (isNewTask || assignChanged) {
             const isSelf = assignPick === Number(currentUser.id);
+            const descRaw = task.description != null ? String(task.description).trim() : '';
             apiFetch('/api/workspace/notify-task-assigned', {
                 method: 'POST',
                 body: JSON.stringify({
@@ -6049,6 +6122,7 @@ function saveTask(event) {
                     dueDate: task.due_date || task.next_due_date || null,
                     isSelf,
                     eventKind: isNewTask ? 'created' : 'reassigned',
+                    taskDescription: descRaw ? descRaw.slice(0, 8000) : '',
                 }),
             }).catch(e => console.error('Task assignment notification failed:', e));
         }
@@ -6429,6 +6503,7 @@ function saveQuickTask(event) {
     }
 
     if (isApiMode() && currentUser && currentUser.smtpConfigured) {
+        const qd = description ? String(description).trim().slice(0, 8000) : '';
         apiFetch('/api/workspace/notify-task-assigned', {
             method: 'POST',
             body: JSON.stringify({
@@ -6437,6 +6512,7 @@ function saveQuickTask(event) {
                 dueDate,
                 isSelf: true,
                 eventKind: 'created',
+                taskDescription: qd,
             }),
         }).catch(e => console.error('Quick task email notification failed:', e));
     }
@@ -6478,7 +6554,21 @@ function getNthWorkingDayOfMonth(year, month, nthDay) {
     return currentDate;
 }
 
-function calculateRecurringDueDate(startDate, frequency, dueDateType, dueDay) {
+/** @param {number} weekday 0=Sun … 6=Sat (Date.getDay) */
+function setToNextWeekdayOnOrAfter(date, weekday) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const wd = Number(weekday);
+    if (!Number.isFinite(wd) || wd < 0 || wd > 6) return d;
+    let guard = 0;
+    while (d.getDay() !== wd && guard < 14) {
+        d.setDate(d.getDate() + 1);
+        guard++;
+    }
+    return d;
+}
+
+function calculateRecurringDueDate(startDate, frequency, dueDateType, dueDay, weeklyWeekday) {
     // Parse date string to avoid timezone issues
     const startParts = startDate.split('-');
     const start = new Date(parseInt(startParts[0]), parseInt(startParts[1]) - 1, parseInt(startParts[2]));
@@ -6487,6 +6577,10 @@ function calculateRecurringDueDate(startDate, frequency, dueDateType, dueDay) {
 
     let targetDate = new Date(start);
     targetDate.setHours(0, 0, 0, 0);
+
+    if (frequency === 'weekly' && weeklyWeekday != null && weeklyWeekday !== '' && Number.isFinite(Number(weeklyWeekday))) {
+        targetDate = setToNextWeekdayOnOrAfter(targetDate, Number(weeklyWeekday));
+    }
 
     // For monthly, quarterly, halfyearly, and yearly frequencies
     if (frequency === 'monthly' || frequency === 'quarterly' || frequency === 'halfyearly' || frequency === 'yearly') {
@@ -6669,7 +6763,14 @@ function calculateNextRecurrenceDate(task) {
             nextDate.setDate(nextDate.getDate() + 1);
             break;
         case 'weekly':
-            nextDate.setDate(nextDate.getDate() + 7);
+            if (task.weekly_weekday != null && task.weekly_weekday !== '' && Number.isFinite(Number(task.weekly_weekday))) {
+                const wd = Number(task.weekly_weekday);
+                let n = new Date(lastDate);
+                n.setDate(n.getDate() + 1);
+                nextDate = setToNextWeekdayOnOrAfter(n, wd);
+            } else {
+                nextDate.setDate(nextDate.getDate() + 7);
+            }
             break;
         case 'monthly':
             nextDate.setMonth(nextDate.getMonth() + 1);
@@ -6749,7 +6850,14 @@ function calculateNextRecurrenceDateForInstance(task, currentDueDateStr) {
             nextDate.setDate(nextDate.getDate() + 1);
             break;
         case 'weekly':
-            nextDate.setDate(nextDate.getDate() + 7);
+            if (task.weekly_weekday != null && task.weekly_weekday !== '' && Number.isFinite(Number(task.weekly_weekday))) {
+                const wd = Number(task.weekly_weekday);
+                let n = new Date(currentDate);
+                n.setDate(n.getDate() + 1);
+                nextDate = setToNextWeekdayOnOrAfter(n, wd);
+            } else {
+                nextDate.setDate(nextDate.getDate() + 7);
+            }
             break;
         case 'monthly':
             nextDate.setMonth(nextDate.getMonth() + 1);
@@ -7176,14 +7284,19 @@ function recalculateAllRecurringDueDates() {
 
             if (!isRecurringTaskEligibleForRecalc(task)) return;
 
-            if (dueDateType !== 'last_working_day' && !task.due_day) {
+            if (task.frequency !== 'weekly' && dueDateType !== 'last_working_day' && !task.due_day) {
                 console.log(`Skipping task "${task.task_name}" - missing due_day`);
                 return;
             }
 
             const originalDueDay = task.due_day;
             const oldDueDate = task.next_due_date || task.due_date;
-            const dueDayForCalc = dueDateType === 'last_working_day' ? (task.due_day || 1) : task.due_day;
+            const dueDayForCalc =
+                task.frequency === 'weekly'
+                    ? task.due_day || 1
+                    : dueDateType === 'last_working_day'
+                      ? task.due_day || 1
+                      : task.due_day;
 
             let newDueDate;
             if (task.start_date) {
@@ -7191,14 +7304,16 @@ function recalculateAllRecurringDueDates() {
                     task.start_date,
                     task.frequency,
                     dueDateType,
-                    dueDayForCalc
+                    dueDayForCalc,
+                    task.weekly_weekday
                 );
             } else if (oldDueDate) {
                 newDueDate = calculateRecurringDueDate(
                     oldDueDate,
                     task.frequency,
                     dueDateType,
-                    dueDayForCalc
+                    dueDayForCalc,
+                    task.weekly_weekday
                 );
             } else {
                 console.log(`Skipping task "${task.task_name}" - no start_date or due_date`);
@@ -7282,6 +7397,7 @@ function processRecurringTasks() {
                     t.task_name === task.task_name &&
                     t.assigned_to === task.assigned_to &&
                     t.frequency === task.frequency &&
+                    (t.weekly_weekday ?? null) === (task.weekly_weekday ?? null) &&
                     (t.next_due_date || t.due_date) &&
                     new Date(t.next_due_date || t.due_date) > new Date()
                 );
@@ -7316,8 +7432,22 @@ function processRecurringTasks() {
                     currentDate.setDate(currentDate.getDate() + 1);
                     nextDueDate = new Date(currentDate);
                 } else if (task.frequency === 'weekly') {
-                    currentDate.setDate(currentDate.getDate() + 7);
-                    nextDueDate = new Date(currentDate);
+                    if (
+                        task.weekly_weekday != null &&
+                        task.weekly_weekday !== '' &&
+                        Number.isFinite(Number(task.weekly_weekday))
+                    ) {
+                        const wd = Number(task.weekly_weekday);
+                        if (i === 0) {
+                            currentDate = setToNextWeekdayOnOrAfter(currentDate, wd);
+                        } else {
+                            currentDate.setDate(currentDate.getDate() + 7);
+                        }
+                        nextDueDate = new Date(currentDate);
+                    } else {
+                        currentDate.setDate(currentDate.getDate() + 7);
+                        nextDueDate = new Date(currentDate);
+                    }
                 } else if (task.frequency === 'monthly') {
                     currentDate.setMonth(currentDate.getMonth() + 1);
                     if (dueDateType === 'last_working_day') {
@@ -7363,6 +7493,7 @@ function processRecurringTasks() {
                     t.task_name === task.task_name &&
                     t.assigned_to === task.assigned_to &&
                     t.frequency === task.frequency &&
+                    (t.weekly_weekday ?? null) === (task.weekly_weekday ?? null) &&
                     (t.next_due_date === nextDateStr || t.due_date === nextDateStr) &&
                     t.id !== task.id
                 );
@@ -7416,6 +7547,11 @@ function copyTask(taskId) {
     document.getElementById('taskFrequency').value = task.frequency || '';
     document.getElementById('taskDueDateType').value = task.due_date_type || 'calendar_day';
     document.getElementById('taskDueDay').value = task.due_day || 1;
+    const wwPick2 = document.getElementById('taskWeeklyWeekday');
+    if (wwPick2) {
+        wwPick2.value =
+            task.weekly_weekday != null && task.weekly_weekday !== '' ? String(task.weekly_weekday) : '';
+    }
     document.getElementById('taskStartDate').value = task.start_date || '';
     document.getElementById('taskRecurrenceType').value = task.recurrence_type || 'calendar_day';
     document.getElementById('taskRecurrenceInterval').value = task.recurrence_interval || 1;
@@ -7989,7 +8125,7 @@ function renderSettings() {
                     <p style="color:#666;font-size:12px;margin-top:4px;">0 = disabled. The server signs users out after this many minutes without API activity (JWT may still be unexpired).</p>
                 </div>
                 <h3 style="margin-top:20px;">Email templates (site-wide)</h3>
-                <p style="color:#666;font-size:13px;">Optional custom HTML and subjects for automated emails. Leave fields blank to use the built-in layout. Task-related CC is configured per organisation under <strong>Settings → Report to</strong> (account admins only), not here. Welcome and password-reset emails are not CC’d.</p>
+                <p style="color:#666;font-size:13px;">Optional custom HTML and subjects. <strong>Leave both fields blank</strong> to use the built-in layout. If you enter a body, it <strong>replaces</strong> the built-in email unless you include <code>{{defaultBody}}</code> where the default should appear. Placeholders like <code>{{overviewTilesLegendHtml}}</code> add extra blocks—omit them if you do not want the overview colour legend. If a saved template fails to render, the server falls back to the built-in layout. Use <strong>Load system default</strong> to copy the current built-in HTML/subject pattern into the fields for editing. Task-related CC is under <strong>Settings → Report to</strong> (org admins). Welcome and password-reset emails are not CC’d.</p>
                 <div id="masterEmailTemplatesWrap" style="margin-top:12px;"></div>
                 <button type="button" class="btn btn-secondary" style="margin-bottom:16px;" onclick="saveMasterEmailSettings()">Save email settings</button>
                 <button type="button" class="btn btn-primary" onclick="saveMasterRegistrationPolicy()">Save registration rules</button>
@@ -8400,9 +8536,24 @@ const MASTER_EMAIL_TYPE_LABELS = {
 const MASTER_EMAIL_OVERVIEW_TILES_HELP =
     'Overview tabs (dashboard colours): HTML {{overviewTilesLegendHtml}} {{tileTodayWork}} {{tileOverdue}} {{tileNoDueDate}} {{tileInProcess}} {{tileWorkPlan}} {{tileNextWorkingDay}} {{tileReportToSelf}} — plain {{overviewTilesLegendText}} {{tileTodayWorkText}} …';
 
+function masterLoadEmailTemplateDefault(key) {
+    const defs = window.__masterEmailTemplateDefaults || {};
+    const d = defs[key];
+    if (!d || typeof d !== 'object') {
+        alert('No system default loaded for this template. Open Settings again to refresh, or reload the page.');
+        return;
+    }
+    const safeK = String(key).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const subjEl = document.getElementById(`masterEmailSubj_${safeK}`);
+    const bodyEl = document.getElementById(`masterEmailBody_${safeK}`);
+    if (!subjEl || !bodyEl) return;
+    if (d.subject != null) subjEl.value = String(d.subject);
+    if (d.bodyHtml != null) bodyEl.value = String(d.bodyHtml);
+}
+
 const MASTER_EMAIL_TYPE_HELP = {
-    task_view_summary: `{{userName}} {{taskCount}} {{generatedLine}} — {{taskRows}} or {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
-    task_assigned: `{{assigneeName}} {{taskTitle}} {{dueDateFormatted}} {{assignerName}} {{isSelf}} {{eventKind}} {{isSelfText}} {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
+    task_view_summary: `{{userName}} {{tileLabel}} {{taskCount}} {{generatedLine}} — {{taskRows}} or {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
+    task_assigned: `{{assigneeName}} {{taskTitle}} {{taskDescription}} {{dueDateFormatted}} {{assignerName}} {{isSelf}} {{eventKind}} {{isSelfText}} {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
     task_rejected: `{{assigneeName}} {{taskTitle}} {{adminComment}} {{adminName}} {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
     reminder: `{{userName}} {{totalCount}} {{defaultBody}}. ${MASTER_EMAIL_OVERVIEW_TILES_HELP}`,
     account_created: '{{userName}} {{source}} {{contextHtml}} {{defaultBody}}',
@@ -8423,6 +8574,8 @@ async function masterEmailSettingsHydrate() {
         const data = await res.json();
         const keys = Array.isArray(data.templateKeys) ? data.templateKeys : [];
         const tpl = data.emailTemplates && typeof data.emailTemplates === 'object' ? data.emailTemplates : {};
+        window.__masterEmailTemplateDefaults =
+            data.templateDefaults && typeof data.templateDefaults === 'object' ? data.templateDefaults : {};
         wrap.innerHTML = keys
             .map((k) => {
                 const label = MASTER_EMAIL_TYPE_LABELS[k] || k;
@@ -8432,6 +8585,7 @@ async function masterEmailSettingsHydrate() {
                 <div class="form-group" style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee;">
                     <h4 style="font-size:14px;margin:0 0 8px;">${escapeHtml(label)}</h4>
                     <p style="font-size:11px;color:#888;margin:0 0 6px;">${escapeHtml(help)}</p>
+                    <button type="button" class="btn btn-secondary" style="margin-bottom:8px;font-size:12px;padding:4px 10px;" data-master-default-key="${escapeHtml(k)}" onclick="masterLoadEmailTemplateDefault(this.getAttribute('data-master-default-key'))">Load system default</button>
                     <label style="font-size:12px;">Subject (optional)</label>
                     <input type="text" id="masterEmailSubj_${safeK}" class="form-control" style="margin-bottom:6px;font-size:13px;" data-template-key="${escapeHtml(k)}" />
                     <label style="font-size:12px;">Body HTML (optional)</label>
@@ -9194,7 +9348,10 @@ async function emailInteractiveTaskViewToAssignees() {
     try {
         const res = await apiFetch('/api/workspace/email-task-view-summary', {
             method: 'POST',
-            body: JSON.stringify({ recipients }),
+            body: JSON.stringify({
+                context: { tileKey: 'task_view', tileLabel: 'Task View' },
+                recipients,
+            }),
         });
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -13368,6 +13525,59 @@ function renderLearningFlashcard(notes) {
     `;
 }
 
+function openLearningNoteReadWindow(noteId) {
+    const data = getData();
+    const n = (data.learningNotes || []).find((x) => x.id == noteId);
+    if (!n) return;
+    const w = window.open('', '_blank', 'width=760,height=640,scrollbars=yes,resizable=yes');
+    if (!w) {
+        alert('Popup blocked. Allow popups for this site to open the reader window.');
+        return;
+    }
+    const tags = (n.tags || [])
+        .map(
+            (t) =>
+                `<span style="display:inline-block;margin:2px 4px 0 0;padding:2px 8px;background:#e3f2fd;border-radius:4px;font-size:12px;">${escapeHtml(t)}</span>`
+        )
+        .join('');
+    const concepts = (n.key_concepts || [])
+        .map(
+            (k) =>
+                `<li style="margin:4px 0;"><strong style="color:#4338ca;">${escapeHtml(k)}</strong></li>`
+        )
+        .join('');
+    const detail = n.detailed_notes
+        ? `<section style="margin-top:16px;"><h2 style="font-size:15px;margin:0 0 8px;color:#334155;">Detailed notes</h2><div style="white-space:pre-wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;font-size:14px;line-height:1.55;color:#1e293b;">${escapeHtml(n.detailed_notes)}</div></section>`
+        : '';
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(n.topic_name)}</title>
+<style>
+body{font-family:Segoe UI,system-ui,sans-serif;margin:0;padding:20px 24px 32px;color:#0f172a;background:#f1f5f9;line-height:1.5;}
+header{margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid #0ea5e9;}
+h1{font-size:22px;margin:0 0 6px;}
+.meta{font-size:13px;color:#64748b;}
+.toolbar{margin:16px 0;display:flex;gap:10px;flex-wrap:wrap;}
+button{padding:8px 14px;border-radius:6px;border:1px solid #cbd5e1;background:#fff;cursor:pointer;font-size:14px;}
+button.primary{background:#0d9488;color:#fff;border-color:#0f766e;}
+ul{margin:8px 0 0;padding-left:20px;}
+@media print { .toolbar { display: none !important; } body { background: #fff; } header { border-color: #ccc; } }
+</style></head><body>
+<header>
+  <h1>${escapeHtml(n.topic_name)}</h1>
+  <div class="meta">${escapeHtml(n.course_name)} · ${formatDateDisplay(n.entry_date)} · ${escapeHtml(getLearningRevisionLabel(n.revision_status))} · Priority ${escapeHtml((n.priority || 'medium').toUpperCase())}</div>
+  <div style="margin-top:10px;">${tags || '<span style="color:#94a3b8;font-size:13px;">No tags</span>'}</div>
+</header>
+<div class="toolbar">
+  <button type="button" class="primary" onclick="window.print()">Export PDF (Print…)</button>
+  <button type="button" onclick="window.close()">Close</button>
+</div>
+<section><h2 style="font-size:15px;margin:0 0 6px;color:#334155;">Key concepts</h2><ul>${concepts || '<li>(none)</li>'}</ul></section>
+${detail}
+</body></html>`;
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+}
+
 function renderLearningNotes() {
     const data = getData();
     const allNotes = Array.isArray(data.learningNotes) ? data.learningNotes : [];
@@ -13424,7 +13634,7 @@ function renderLearningNotes() {
             <div class="task-item" style="padding:12px; border-left:4px solid ${priorityColor};">
                 <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
                     <div>
-                        <div style="font-weight:700;">${escapeHtml(n.topic_name)}</div>
+                        <div style="font-weight:700;cursor:pointer;color:#0d47a1;text-decoration:underline;" onclick="openLearningNoteReadWindow(${n.id})" title="Open in new window for reading">${escapeHtml(n.topic_name)}</div>
                         <div style="font-size:12px; color:#666;">${escapeHtml(n.course_name)} | ${formatDateDisplay(n.entry_date)}</div>
                     </div>
                     <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -13445,6 +13655,7 @@ function renderLearningNotes() {
                     <button class="btn btn-secondary" onclick="toggleLearningCollapse(${n.id})">${collapsed ? 'Expand' : 'Collapse'}</button>
                     <button class="btn btn-secondary" onclick="toggleLearningPin(${n.id})">${n.pinned ? 'Unpin' : 'Pin'}</button>
                     <button class="btn btn-success" onclick="markLearningNoteRevised(${n.id})">Mark as Revised</button>
+                    <button class="btn btn-secondary" onclick="openLearningNoteReadWindow(${n.id})">Read</button>
                     <button class="btn btn-primary" onclick="openLearningNoteModal(${n.id})">Edit</button>
                     <button class="btn btn-danger" onclick="deleteLearningNote(${n.id})">Delete</button>
                 </div>

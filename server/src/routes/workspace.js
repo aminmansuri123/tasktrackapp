@@ -35,7 +35,7 @@ const { formatLastLoginAtDisplay } = require('../lib/lastLoginFormat');
 
 const router = express.Router();
 
-const EXPORT_VERSION = '17.4.2';
+const EXPORT_VERSION = '17.5.0';
 
 function sanitizeNotificationEmailCc(raw) {
   const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,;]+/) : [];
@@ -1020,7 +1020,7 @@ router.get('/reminder-prefs/org-users', authMiddleware, async (req, res) => {
 router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
   if (!EMAIL_CONFIGURED) return res.json({ ok: true, skipped: true });
   try {
-    const { assignedToUserId, taskTitle, dueDate, isSelf, eventKind } = req.body || {};
+    const { assignedToUserId, taskTitle, dueDate, isSelf, eventKind, taskDescription } = req.body || {};
     const assigneeId = parseInt(String(assignedToUserId), 10);
     if (Number.isNaN(assigneeId)) return res.status(400).json({ error: 'Invalid assignedToUserId' });
 
@@ -1043,6 +1043,10 @@ router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
     const assignerName = assigner ? (assigner.name || assigner.email) : 'Admin';
 
     const kind = eventKind === 'reassigned' ? 'reassigned' : 'created';
+    const desc =
+      taskDescription != null && String(taskDescription).trim() !== ''
+        ? String(taskDescription).trim().slice(0, 8000)
+        : '';
     await sendTaskAssignmentEmail(
       assignee.email,
       assignee.name || assignee.email,
@@ -1051,7 +1055,8 @@ router.post('/notify-task-assigned', authMiddleware, async (req, res) => {
       assignerName,
       !!isSelf,
       kind,
-      tenantRoot
+      tenantRoot,
+      desc
     );
     return res.json({ ok: true });
   } catch (e) {
@@ -1215,7 +1220,11 @@ router.post(
         return res.status(503).json({ error: 'Email is not configured on this server.' });
       }
       const tenantRoot = resolveTenantRoot(req);
-      const { recipients } = req.body;
+      const { recipients, context } = req.body;
+      const tileLabel =
+        context && context.tileLabel && String(context.tileLabel).trim()
+          ? String(context.tileLabel).trim().slice(0, 120)
+          : 'Task View';
       const sent = [];
       const errors = [];
       for (const block of recipients) {
@@ -1232,7 +1241,9 @@ router.post(
         const tasks = Array.isArray(block.tasks) ? block.tasks : [];
         if (tasks.length === 0) continue;
         try {
-          await sendTaskViewSummaryEmail(udoc.email, udoc.name || udoc.email, tasks, tenantRoot);
+          await sendTaskViewSummaryEmail(udoc.email, udoc.name || udoc.email, tasks, tenantRoot, {
+            tileLabel,
+          });
           sent.push(uid);
         } catch (err) {
           console.error('email-task-view-summary:', err.message);
